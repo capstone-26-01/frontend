@@ -1,6 +1,7 @@
 'use client';
 
 import Background from '@/public/components/Background';
+import FeaturesSection from '@/public/components/FeatureSection';
 import HeroSection from '@/public/components/HeroSection';
 import { useState } from 'react';
 
@@ -16,6 +17,7 @@ export default function GitStarterLanding() {
       <Background />
       <HeroSection repo={repo} onRepoChange={setRepo} onAnalyze={handleAnalyze} />
 
+      <FeaturesSection />
     </div>
   );
 }
