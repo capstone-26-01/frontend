@@ -8,7 +8,7 @@ interface FeatureCardProps {
 
 export default function FeatureCard({ tag, title, desc }: FeatureCardProps) {
   return (
-    <div className="group p-10 rounded-3xl bg-[#0a0c10] border border-white/40 hover:border-[#00e5ff]/40 transition-all duration-300 relative overflow-hidden">
+    <div className="group p-10 rounded-3xl bg-[#0a0c10] border border-white/10 hover:border-[#00e5ff]/40 transition-all duration-300 relative overflow-hidden">
       {/* Tag watermark */}
       <div className="absolute top-0 right-0 p-6 text-4xl font-mono font-black text-white/5 group-hover:text-[#00e5ff]/10 transition-colors">
         {tag}
