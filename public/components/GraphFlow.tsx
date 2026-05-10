@@ -30,7 +30,19 @@ const MiniMap = _MiniMap as any;
 // Types & Theme
 // ─────────────────────────────────────────────
 
-type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin';
+export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin';
+
+export interface NodeInfo {
+  id: string;
+  label: string;
+  kind: NodeKind;
+  methods: string[];
+  properties?: string[];
+}
+
+interface GraphFlowProps {
+  onNodeSelect?: (node: NodeInfo) => void;
+}
 type EdgeKind = 'extends' | 'implements' | 'mixin';
 type LayoutDir = 'TB' | 'LR' | 'radial';
 
@@ -495,7 +507,7 @@ function Toolbar({
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
-function GraphFlowInner() {
+function GraphFlowInner({ onNodeSelect }: GraphFlowProps) {
   const { setCenter, getNode } = useReactFlow();
 
   // ── State ──────────────────────────────────
@@ -551,7 +563,8 @@ function GraphFlowInner() {
     setSelectedNode(node as Node<ClassData>);
     const connected = getConnectedPath(node.id, RAW_EDGES);
     setPathIds(connected);
-  }, []);
+    onNodeSelect?.({ id: node.id, ...(node.data as ClassData) });
+  }, [onNodeSelect]);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNode(null);
@@ -705,10 +718,10 @@ function GraphFlowInner() {
 // Export: wrap with ReactFlowProvider
 // ─────────────────────────────────────────────
 
-export default function GraphFlow() {
+export default function GraphFlow({ onNodeSelect }: GraphFlowProps = {}) {
   return (
     <ReactFlowProvider>
-      <GraphFlowInner />
+      <GraphFlowInner onNodeSelect={onNodeSelect} />
     </ReactFlowProvider>
   );
 }
