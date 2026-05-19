@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useState, useMemo, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 import ReactFlow, {
   Background as _Background,
   Controls as _Controls,
@@ -30,7 +31,7 @@ const MiniMap = _MiniMap as any;
 // Types & Theme
 // ─────────────────────────────────────────────
 
-export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin';
+export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin' | 'class' | 'function' | 'module' | 'method' | 'external';
 
 export interface NodeInfo {
   id: string;
@@ -46,8 +47,11 @@ export interface GraphFlowHandle {
 
 interface GraphFlowProps {
   onNodeSelect?: (node: NodeInfo) => void;
+  apiNodes?: RepoGraphNode[] | null;
+  apiEdges?: RepoGraphEdge[] | null;
+  loading?: boolean;
 }
-type EdgeKind = 'extends' | 'implements' | 'mixin';
+type EdgeKind = string;
 type LayoutDir = 'TB' | 'LR' | 'radial';
 
 interface ClassData {
@@ -60,10 +64,17 @@ interface ClassData {
 const KIND_THEME: Record<NodeKind, {
   border: string; badge: string; badgeText: string; glow: string; icon: string;
 }> = {
+  // OOP 스타일
   abstract:  { border: '#00e5ff', badge: '#00e5ff22', badgeText: '#00e5ff', glow: '0 0 24px rgba(0,229,255,0.35)', icon: '⬡' },
   concrete:  { border: '#3b82f6', badge: '#3b82f622', badgeText: '#93c5fd', glow: '0 0 16px rgba(59,130,246,0.25)', icon: '⬢' },
   interface: { border: '#a855f7', badge: '#a855f722', badgeText: '#d8b4fe', glow: '0 0 16px rgba(168,85,247,0.25)', icon: '⟨⟩' },
   mixin:     { border: '#f59e0b', badge: '#f59e0b22', badgeText: '#fcd34d', glow: '0 0 16px rgba(245,158,11,0.25)', icon: '⊕' },
+  // API 실제 kind 값
+  class:    { border: '#3b82f6', badge: '#3b82f622', badgeText: '#93c5fd', glow: '0 0 16px rgba(59,130,246,0.25)', icon: '⬢' },
+  function: { border: '#10b981', badge: '#10b98122', badgeText: '#6ee7b7', glow: '0 0 16px rgba(16,185,129,0.25)', icon: 'ƒ' },
+  module:   { border: '#00e5ff', badge: '#00e5ff22', badgeText: '#00e5ff', glow: '0 0 24px rgba(0,229,255,0.35)', icon: '◈' },
+  method:   { border: '#6366f1', badge: '#6366f122', badgeText: '#a5b4fc', glow: '0 0 16px rgba(99,102,241,0.25)', icon: 'm' },
+  external: { border: '#4b5563', badge: '#4b556322', badgeText: '#9ca3af', glow: '0 0 8px rgba(75,85,99,0.2)',   icon: '↗' },
 };
 
 // ─────────────────────────────────────────────
@@ -77,7 +88,7 @@ interface ClassNodeData extends ClassData {
 }
 
 function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
-  const theme = KIND_THEME[data.kind];
+  const theme = KIND_THEME[data.kind] ?? KIND_THEME.concrete;
   const opacity = data.dimmed ? 0.18 : 1;
   const scale = data.highlighted ? 1.04 : 1;
 
@@ -118,7 +129,7 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
       {data.properties && data.properties.length > 0 && (
         <div style={{ padding: '7px 14px 4px', borderBottom: '1px solid #ffffff08' }}>
           {data.properties.map((p) => (
-            <div key={p} style={{ fontSize: 10, color: '#6b7280', lineHeight: '1.7' }}>
+            <div key={p} style={{ fontSize: 10, color: '#94a3b8', lineHeight: '1.7' }}>
               <span style={{ color: '#4ade80' }}>+</span> {p}
             </div>
           ))}
@@ -184,30 +195,61 @@ const RAW_NODES: Node<ClassData>[] = [
   },
 ];
 
-const edgeBase = {
-  style: { stroke: '#00e5ff44', strokeWidth: 1.5 },
-  markerEnd: { type: MarkerType.ArrowClosed, color: '#00e5ff88', width: 14, height: 14 },
+// ─────────────────────────────────────────────
+// Edge theme — kind별 색상 + 선 스타일
+// ─────────────────────────────────────────────
+const EDGE_PALETTE: Record<string, { color: string; dash?: string; width?: number }> = {
+  // API 실제 kind
+  inherits:   { color: '#00e5ff', width: 2 },
+  imports:    { color: '#6366f1', dash: '8 4', width: 1.5 },
+  calls:      { color: '#f59e0b', dash: '3 5', width: 1.5 },
+  contains:   { color: '#7a8a9e', width: 1 },
+  entrypoint: { color: '#10b981', width: 2.5 },
+  // OOP 레거시
+  extends:    { color: '#00e5ff', width: 2 },
+  implements: { color: '#a855f7', dash: '5 4', width: 1.5 },
+  mixin:      { color: '#f59e0b', dash: '3 3', width: 1.5 },
 };
-const implementsEdge = {
-  style: { stroke: '#a855f766', strokeWidth: 1.5, strokeDasharray: '5 4' },
-  markerEnd: { type: MarkerType.ArrowClosed, color: '#a855f7aa', width: 14, height: 14 },
-};
-const mixinEdge = {
-  style: { stroke: '#f59e0b66', strokeWidth: 1.5, strokeDasharray: '3 3' },
-  markerEnd: { type: MarkerType.ArrowClosed, color: '#f59e0baa', width: 14, height: 14 },
-};
+const EDGE_DEFAULT = { color: '#7a8a9e', width: 1 };
+
+function getEdgeStyle(kind: string) {
+  const p = EDGE_PALETTE[kind] ?? EDGE_DEFAULT;
+  return {
+    data: { kind },
+    style: {
+      stroke: p.color + 'bb',
+      strokeWidth: p.width ?? 1.5,
+      strokeDasharray: p.dash,
+    },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: p.color + 'dd',
+      width: 12, height: 12,
+    },
+    label: kind,
+    labelStyle: {
+      fontSize: 9,
+      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      fill: p.color,
+      fontWeight: 700,
+    },
+    labelBgStyle: { fill: '#05070a', fillOpacity: 0.85 },
+    labelBgPadding: [3, 6] as [number, number],
+    labelBgBorderRadius: 4,
+  };
+}
 
 const RAW_EDGES: Edge[] = [
-  { id: 'a-m',    source: 'animal',    target: 'mammal',   label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'a-b',    source: 'animal',    target: 'bird',     label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'm-dog',  source: 'mammal',    target: 'dog',      label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'm-dol',  source: 'mammal',    target: 'dolphin',  label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'b-eag',  source: 'bird',      target: 'eagle',    label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'b-pen',  source: 'bird',      target: 'penguin',  label: 'extends',    data: { kind: 'extends' },    ...edgeBase },
-  { id: 'fly-eag', source: 'flyable', target: 'eagle',    label: 'implements', data: { kind: 'implements' }, ...implementsEdge },
-  { id: 'fly-bird', source: 'flyable', target: 'bird',    label: 'implements', data: { kind: 'implements' }, ...implementsEdge },
-  { id: 'swim-dol', source: 'swimmable', target: 'dolphin', label: 'mixin',   data: { kind: 'mixin' },      ...mixinEdge },
-  { id: 'swim-pen', source: 'swimmable', target: 'penguin', label: 'mixin',   data: { kind: 'mixin' },      ...mixinEdge },
+  { id: 'a-m',     source: 'animal',    target: 'mammal',   ...getEdgeStyle('extends') },
+  { id: 'a-b',     source: 'animal',    target: 'bird',     ...getEdgeStyle('extends') },
+  { id: 'm-dog',   source: 'mammal',    target: 'dog',      ...getEdgeStyle('extends') },
+  { id: 'm-dol',   source: 'mammal',    target: 'dolphin',  ...getEdgeStyle('extends') },
+  { id: 'b-eag',   source: 'bird',      target: 'eagle',    ...getEdgeStyle('extends') },
+  { id: 'b-pen',   source: 'bird',      target: 'penguin',  ...getEdgeStyle('extends') },
+  { id: 'fly-eag', source: 'flyable',   target: 'eagle',    ...getEdgeStyle('implements') },
+  { id: 'fly-bird',source: 'flyable',   target: 'bird',     ...getEdgeStyle('implements') },
+  { id: 'swim-dol',source: 'swimmable', target: 'dolphin',  ...getEdgeStyle('mixin') },
+  { id: 'swim-pen',source: 'swimmable', target: 'penguin',  ...getEdgeStyle('mixin') },
 ];
 
 // ─────────────────────────────────────────────
@@ -316,21 +358,30 @@ function applyRadialLayout(nodes: Node[], edges: Edge[]): Node[] {
 function Legend({
   activeEdgeKinds,
   onToggleEdge,
+  presentNodeKinds,
+  presentEdgeKinds,
 }: {
   activeEdgeKinds: Set<EdgeKind>;
   onToggleEdge: (k: EdgeKind) => void;
+  presentNodeKinds: Set<string>;
+  presentEdgeKinds: Set<string>;
 }) {
-  const nodeItems: { kind: NodeKind; label: string }[] = [
-    { kind: 'abstract', label: 'Abstract Class' },
-    { kind: 'concrete', label: 'Concrete Class' },
-    { kind: 'interface', label: 'Interface' },
-    { kind: 'mixin', label: 'Mixin' },
+  const ALL_NODE_ITEMS: { kind: NodeKind; label: string }[] = [
+    { kind: 'class',    label: 'Class' },
+    { kind: 'module',   label: 'Module' },
+    { kind: 'function', label: 'Function' },
+    { kind: 'abstract', label: 'Abstract' },
+    { kind: 'concrete', label: 'Concrete' },
+    { kind: 'interface',label: 'Interface' },
+    { kind: 'mixin',    label: 'Mixin' },
+    { kind: 'method',   label: 'Method' },
+    { kind: 'external', label: 'External' },
   ];
-  const edgeItems: { kind: EdgeKind; dash: string; color: string }[] = [
-    { kind: 'extends',    dash: 'none', color: '#00e5ff88' },
-    { kind: 'implements', dash: '5 4',  color: '#a855f7aa' },
-    { kind: 'mixin',      dash: '3 3',  color: '#f59e0baa' },
-  ];
+  const nodeItems = ALL_NODE_ITEMS.filter(i => presentNodeKinds.has(i.kind));
+  const edgeItems = Array.from(presentEdgeKinds).map(kind => {
+    const p = EDGE_PALETTE[kind] ?? EDGE_DEFAULT;
+    return { kind, color: p.color, dash: p.dash ?? 'none' };
+  });
 
   return (
     <div style={{
@@ -353,7 +404,7 @@ function Legend({
       })}
 
       <div style={{ borderTop: '1px solid #ffffff10', marginTop: 4, paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontSize: 9, color: '#4b5563', letterSpacing: '0.1em', marginBottom: 2 }}>
+        <div style={{ fontSize: 9, color: '#6b7280', letterSpacing: '0.1em', marginBottom: 2 }}>
           EDGE FILTER — click to toggle
         </div>
         {edgeItems.map(({ kind, dash, color }) => {
@@ -374,7 +425,7 @@ function Legend({
                   stroke={color} strokeWidth="1.5"
                   strokeDasharray={dash === 'none' ? undefined : dash} />
               </svg>
-              <span style={{ fontSize: 10, color: active ? '#9ca3af' : '#4b5563' }}>{kind}</span>
+              <span style={{ fontSize: 10, color: active ? '#cbd5e1' : '#6b7280' }}>{kind}</span>
             </div>
           );
         })}
@@ -407,16 +458,16 @@ function DetailPanel({ node }: { node: Node<ClassData> | null }) {
       <div style={{ fontSize: 14, fontWeight: 700, color: '#e8eaf0', marginBottom: 10 }}>{label}</div>
       {properties && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 9, color: '#4b5563', marginBottom: 4, letterSpacing: '0.1em' }}>PROPERTIES</div>
+          <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>PROPERTIES</div>
           {properties.map(p => (
-            <div key={p} style={{ fontSize: 10, color: '#6b7280', lineHeight: 1.8 }}>
+            <div key={p} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.8 }}>
               <span style={{ color: '#4ade80' }}>+</span> {p}
             </div>
           ))}
         </div>
       )}
       <div>
-        <div style={{ fontSize: 9, color: '#4b5563', marginBottom: 4, letterSpacing: '0.1em' }}>METHODS</div>
+        <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>METHODS</div>
         {methods.map(m => (
           <div key={m} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.8 }}>
             <span style={{ color: t.badgeText, opacity: 0.7 }}>ƒ</span> {m}
@@ -461,7 +512,7 @@ function Toolbar({
     }}>
       {/* Search */}
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-        <span style={{ position: 'absolute', left: 8, fontSize: 11, color: '#4b5563' }}>⌕</span>
+        <span style={{ position: 'absolute', left: 8, fontSize: 11, color: '#6b7280' }}>⌕</span>
         <input
           value={query}
           onChange={(e) => onQuery(e.target.value)}
@@ -496,7 +547,7 @@ function Toolbar({
             background: layout === id ? '#00e5ff18' : 'transparent',
             border: `1px solid ${layout === id ? '#00e5ff44' : 'transparent'}`,
             borderRadius: 7, padding: '4px 10px',
-            color: layout === id ? '#00e5ff' : '#4b5563',
+            color: layout === id ? '#00e5ff' : '#6b7280',
             fontSize: 11, cursor: 'pointer',
             fontFamily: 'inherit', transition: 'all 0.15s',
             display: 'flex', alignItems: 'center', gap: 4,
@@ -514,7 +565,7 @@ function Toolbar({
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
-const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect }, ref) {
+const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect, apiNodes, apiEdges, loading }, ref) {
   const { setCenter, getNode } = useReactFlow();
 
   // ── State ──────────────────────────────────
@@ -550,9 +601,21 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   // ② Edge filter: derive visible edges
   // ─────────────────────────────────────────
+  const presentNodeKinds = useMemo(
+    () => new Set(nodes.map(n => (n.data as ClassData).kind as string)),
+    [nodes]
+  );
+  const presentEdgeKinds = useMemo(
+    () => new Set(edges.map(e => e.data?.kind as string).filter(Boolean)),
+    [edges]
+  );
+
+  // activeEdgeKinds가 비어있으면(초기값) 전체 허용
   const visibleEdges = useMemo(
-    () => RAW_EDGES.filter((e) => activeEdgeKinds.has(e.data?.kind as EdgeKind)),
-    [activeEdgeKinds]
+    () => activeEdgeKinds.size === 0
+      ? edges
+      : edges.filter((e) => activeEdgeKinds.has(e.data?.kind as EdgeKind)),
+    [edges, activeEdgeKinds]
   );
 
   const handleToggleEdge = useCallback((kind: EdgeKind) => {
@@ -579,10 +642,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   const handleNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNode(node as Node<ClassData>);
-    const connected = getConnectedPath(node.id, RAW_EDGES);
+    const connected = getConnectedPath(node.id, edges);
     setPathIds(connected);
     onNodeSelect?.({ id: node.id, ...(node.data as ClassData) });
-  }, [onNodeSelect]);
+  }, [onNodeSelect, edges]);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNode(null);
@@ -638,8 +701,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   const searchMatches = useMemo(() => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
-    return RAW_NODES.filter((n) => n.data.label.toLowerCase().includes(q));
-  }, [query]);
+    return nodes.filter((n) => (n.data as ClassData).label.toLowerCase().includes(q));
+  }, [query, nodes]);
 
   // Jump camera to first match
   useEffect(() => {
@@ -668,14 +731,14 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     setLayout(dir);
     let next: Node[];
     if (dir === 'radial') {
-      next = applyRadialLayout([...nodes], RAW_EDGES);
+      next = applyRadialLayout([...nodes], edges);
     } else {
-      next = applyDagreLayout([...nodes], RAW_EDGES, dir);
+      next = applyDagreLayout([...nodes], edges, dir);
     }
     setNodes(next as any);
-  }, [nodes, setNodes]);
+  }, [nodes, edges, setNodes]);
 
-  // Initialise layout once on mount
+  // Initialise layout once on mount with RAW data
   const didInit = useRef(false);
   useEffect(() => {
     if (didInit.current) return;
@@ -684,6 +747,44 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     setNodes(laid as any);
   }, [setNodes]);
 
+  // Re-initialize when real API data arrives
+  useEffect(() => {
+    if (!apiNodes || !apiEdges) return;
+
+    // external(속성 참조)·method(개별 메서드) 는 노이즈 — 기본 필터
+    const HIDDEN_KINDS = new Set(['external', 'method']);
+    const visibleNodeIds = new Set(
+      apiNodes.filter(n => !HIDDEN_KINDS.has(n.kind)).map(n => n.id)
+    );
+
+    const rfNodes: Node<ClassData>[] = apiNodes
+      .filter(n => !HIDDEN_KINDS.has(n.kind))
+      .map(n => ({
+        id: n.id, type: 'classNode', position: { x: 0, y: 0 },
+        data: { label: n.label, kind: (n.kind in KIND_THEME ? n.kind : 'concrete') as NodeKind, methods: n.methods ?? [], properties: n.properties },
+      }));
+
+    // 양 끝 노드가 모두 visible 한 엣지만 포함
+    const rfEdges: Edge[] = apiEdges
+      .filter(e => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target))
+      .map(e => ({
+        id: e.id ?? `${e.source}-${e.target}`,
+        source: e.source, target: e.target,
+        ...getEdgeStyle(e.kind),
+      }));
+
+    // 실제 엣지 kind 로 필터 초기화
+    const allKinds = new Set(rfEdges.map(e => e.data?.kind as EdgeKind).filter(Boolean));
+    if (allKinds.size > 0) setActiveEdgeKinds(allKinds);
+
+    const laid = applyDagreLayout(rfNodes, rfEdges, 'TB');
+    setNodes(laid as any);
+    setEdges(rfEdges);
+    setLayout('TB');
+    setSelectedNode(null);
+    setPathIds(null);
+  }, [apiNodes, apiEdges, setNodes, setEdges]);
+
   const onConnect = useCallback(
     (params: Edge | Connection) => setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
     [setEdges]
@@ -691,6 +792,24 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {/* Loading overlay */}
+      {loading && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 20,
+          background: '#05070acc', backdropFilter: 'blur(4px)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: 12, fontFamily: '"JetBrains Mono", monospace',
+        }}>
+          <div style={{
+            width: 32, height: 32, border: '2px solid #00e5ff33',
+            borderTopColor: '#00e5ff', borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+          }} />
+          <span style={{ fontSize: 11, color: '#00e5ff88', letterSpacing: '0.1em' }}>Loading graph…</span>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
       {/* ── Toolbar ── */}
       <Toolbar
         query={query}
@@ -719,13 +838,18 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         <Controls style={{ background: '#0b0d14', border: '1px solid #ffffff10', borderRadius: 10 }} />
         <MiniMap
           style={{ background: '#0b0d14', border: '1px solid #ffffff10', borderRadius: 10 }}
-          nodeColor={((n: any) => KIND_THEME[(n.data?.kind as NodeKind) ?? 'concrete'].border + '99') as any}
+          nodeColor={((n: any) => (KIND_THEME[n.data?.kind as NodeKind] ?? KIND_THEME.concrete).border + '99') as any}
           maskColor="#05070acc"
         />
       </ReactFlow>
 
       {/* ② Legend with edge filter */}
-      <Legend activeEdgeKinds={activeEdgeKinds} onToggleEdge={handleToggleEdge} />
+      <Legend
+        activeEdgeKinds={activeEdgeKinds}
+        onToggleEdge={handleToggleEdge}
+        presentNodeKinds={presentNodeKinds}
+        presentEdgeKinds={presentEdgeKinds}
+      />
 
       {/* ③ Detail panel */}
       <DetailPanel node={selectedNode} />
@@ -737,10 +861,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
 // Export: wrap with ReactFlowProvider
 // ─────────────────────────────────────────────
 
-const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect }, ref) {
+const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect, apiNodes, apiEdges, loading }, ref) {
   return (
     <ReactFlowProvider>
-      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} />
+      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} apiNodes={apiNodes} apiEdges={apiEdges} loading={loading} />
     </ReactFlowProvider>
   );
 });

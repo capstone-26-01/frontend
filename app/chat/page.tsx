@@ -1,22 +1,13 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import GraphFlow from '@/public/components/GraphFlow';
-import ChatPanel, { type Message } from '@/public/components/chat/ChatPanel';
+import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
-
-const MOCK_RESPONSES: Record<string, string> = {
-  animal:    '`Animal` is the root abstract class. It defines the core contract—`speak()`, `move()`, `toString()`—that every concrete animal must implement. Nothing here is instantiable; it just sets the rules.',
-  mammal:    '`Mammal` extends `Animal` and adds warm-blooded traits: a `furColor` property and `breathe()` / `nurse()` methods. Both `Dog` and `Dolphin` extend it.',
-  bird:      '`Bird` extends `Animal` with a `wingspan` property and `layEgg()`. Eagle and Penguin are the two concrete birds—Eagle flies, Penguin doesn\'t, which is a classic Liskov Substitution edge case.',
-  flyable:   '`IFlyable` is an interface that enforces `fly()` and `land()`. Both `Bird` and `Eagle` implement it, but `Penguin` does not—even though it\'s a bird.',
-  swimmable: '`Swimmable` is a mixin that injects `swim()` and `dive()` behavior into `Dolphin` and `Penguin` via composition rather than inheritance.',
-  dog:       '`Dog` is the simplest concrete leaf: it overrides `speak()` and adds `fetch()`. No extra complexity.',
-  dolphin:   '`Dolphin` is a concrete `Mammal` that also mixes in `Swimmable`. The unique `echolocate()` method makes it behaviorally distinct from all other mammals.',
-  eagle:     '`Eagle` is a concrete `Bird` that implements `IFlyable`. Its exclusive `hunt()` method and owned `territory` property make it the most specialized node in the graph.',
-  penguin:   '`Penguin` is a concrete `Bird` that can\'t fly but mixes in `Swimmable`. It\'s the best example in this graph of why interface segregation beats a monolithic `Animal` interface.',
-};
+import { fetchGraph, fetchNodeSummary, postQA } from '@/lib/api';
+import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
   abstract:  ['Which classes extend this?', 'What must subclasses implement?'],
@@ -25,10 +16,6 @@ const FOLLOW_UPS: Record<string, string[]> = {
   mixin:     ['Which classes use this mixin?', 'Why mixin instead of inheritance?'],
 };
 
-function getMockResponse(node: NodeInfo): string {
-  return MOCK_RESPONSES[node.id] ?? `\`${node.label}\` is a **${node.kind}** with ${node.methods.length} method(s). Try asking something specific!`;
-}
-
 const INITIAL_MESSAGES: Message[] = [{
   id: 'init',
   role: 'assistant',
@@ -36,13 +23,43 @@ const INITIAL_MESSAGES: Message[] = [{
 }];
 
 export default function ChatPage() {
+  const searchParams = useSearchParams();
+  const analysisId = searchParams.get('analysis_id') ? Number(searchParams.get('analysis_id')) : null;
+  const repoName = searchParams.get('repo') ?? '';
+  const revision = searchParams.get('revision') ?? undefined;
+  const repoUrl = searchParams.get('url') ?? (repoName ? `https://github.com/${repoName}` : '');
+
   const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [nodeTrail, setNodeTrail] = useState<NodeInfo[]>([]);
   const [chatWidth, setChatWidth] = useState(380);
   const [collapsed, setCollapsed] = useState(false);
 
+  const [apiNodes, setApiNodes] = useState<RepoGraphNode[] | null>(null);
+  const [apiEdges, setApiEdges] = useState<RepoGraphEdge[] | null>(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+
   const isDragging = useRef(false);
   const graphRef = useRef<GraphFlowHandle>(null);
+
+  // Load graph data
+  useEffect(() => {
+    if (!repoUrl) return;
+    setGraphLoading(true);
+    fetchGraph(repoUrl, revision)
+      .then(data => {
+        setApiNodes(data.nodes);
+        setApiEdges(data.edges);
+      })
+      .catch(() => {
+        // keep showing mock graph on error
+      })
+      .finally(() => setGraphLoading(false));
+  }, [repoUrl, revision]);
+
+  const nodeMapForChat = useMemo<NodeMapEntry[]>(
+    () => (apiNodes ?? []).map(n => ({ label: n.label, id: n.id, kind: n.kind })),
+    [apiNodes]
+  );
 
   const handleFocusNode = useCallback((id: string) => {
     graphRef.current?.focusNode(id);
@@ -63,42 +80,73 @@ export default function ChatPage() {
     };
   }, []);
 
-  const handleNodeSelect = useCallback((node: NodeInfo) => {
+  const handleNodeSelect = useCallback(async (node: NodeInfo) => {
     setNodeTrail(prev => [node, ...prev.filter(n => n.id !== node.id)].slice(0, 4));
+    if (collapsed) setCollapsed(false);
+
     setMessages(prev => [...prev, {
       id: `ctx-${Date.now()}`,
       role: 'node-context',
       content: '',
       node,
     }]);
-    if (collapsed) setCollapsed(false);
-  }, [collapsed]);
 
-  const handleSend = useCallback((text: string, contextNode: NodeInfo | null) => {
-    const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text };
-    const assistantId = `a-${Date.now() + 1}`;
-    const streamingMsg: Message = { id: assistantId, role: 'assistant', content: '', isStreaming: true };
+    if (analysisId == null) return;
 
-    setMessages(prev => [...prev, userMsg, streamingMsg]);
+    const assistantId = `ns-${Date.now()}`;
+    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', isStreaming: true }]);
 
-    const full = contextNode
-      ? getMockResponse(contextNode)
-      : 'Try clicking a node on the graph first — then I can give you context-aware answers about it!';
-
-    const followUps = contextNode ? (FOLLOW_UPS[contextNode.kind] ?? []) : [];
-
-    let i = 0;
-    const interval = setInterval(() => {
-      i += 4;
-      const done = i >= full.length;
+    try {
+      const data = await fetchNodeSummary(analysisId, node.id);
+      const summary = typeof data.summary === 'string' ? data.summary : JSON.stringify(data.summary, null, 2);
       setMessages(prev => prev.map(m =>
         m.id === assistantId
-          ? { ...m, content: full.slice(0, i), isStreaming: !done, followUps: done ? followUps : undefined }
+          ? { ...m, content: summary, isStreaming: false, followUps: FOLLOW_UPS[node.kind] ?? [] }
           : m
       ));
-      if (done) clearInterval(interval);
-    }, 18);
-  }, []);
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId
+          ? { ...m, content: `No summary available for \`${node.label}\`.`, isStreaming: false }
+          : m
+      ));
+    }
+  }, [analysisId, collapsed]);
+
+  const handleSend = useCallback(async (text: string, contextNode: NodeInfo | null) => {
+    const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text };
+    const assistantId = `a-${Date.now() + 1}`;
+
+    setMessages(prev => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '', isStreaming: true }]);
+
+    try {
+      const data = await postQA({
+        repo_url: repoUrl,
+        question: text,
+        analysis_id: analysisId ?? undefined,
+        selected_node_id: contextNode?.id,
+        revision,
+      });
+
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId
+          ? {
+              ...m,
+              content: data.answer,
+              isStreaming: false,
+              followUps: contextNode ? (FOLLOW_UPS[contextNode.kind] ?? []) : [],
+              citations: data.citations?.length ? data.citations : undefined,
+            }
+          : m
+      ));
+    } catch (e) {
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId
+          ? { ...m, content: 'Failed to get response. Please try again.', isStreaming: false }
+          : m
+      ));
+    }
+  }, [repoUrl, analysisId, revision]);
 
   const handleClear = useCallback(() => {
     setMessages(INITIAL_MESSAGES);
@@ -128,7 +176,7 @@ export default function ChatPage() {
               <line x1="11" y1="8" x2="4.5" y2="14.5" stroke="#00e5ff" strokeWidth="1.2" strokeOpacity="0.35" />
               <line x1="11" y1="8" x2="17.5" y2="14.5" stroke="#00e5ff" strokeWidth="1.2" strokeOpacity="0.35" />
             </svg>
-            <span className="text-xs font-mono text-white/60">facebook / react</span>
+            <span className="text-xs font-mono text-white/60">{repoName || 'unknown / repo'}</span>
           </div>
 
           {/* Node trail */}
@@ -170,7 +218,13 @@ export default function ChatPage() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left: Graph */}
         <div className="flex-1 overflow-hidden">
-          <GraphFlow ref={graphRef} onNodeSelect={handleNodeSelect} />
+          <GraphFlow
+            ref={graphRef}
+            onNodeSelect={handleNodeSelect}
+            apiNodes={apiNodes}
+            apiEdges={apiEdges}
+            loading={graphLoading}
+          />
         </div>
 
         {/* Draggable divider */}
@@ -191,6 +245,7 @@ export default function ChatPage() {
             onSend={handleSend}
             onClear={handleClear}
             onFocusNode={handleFocusNode}
+            nodeMap={nodeMapForChat}
           />
         </div>
       </div>
