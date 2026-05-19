@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent, ChangeEvent } from 'react';
 import type { NodeInfo } from '@/public/components/GraphFlow';
 
 export interface Message {
@@ -10,7 +10,10 @@ export interface Message {
   node?: NodeInfo;
   isStreaming?: boolean;
   followUps?: string[];
+  citations?: string[];
 }
+
+export type NodeMapEntry = { label: string; id: string; kind: string };
 
 const KIND_COLOR: Record<string, string> = {
   abstract:  '#00e5ff',
@@ -19,36 +22,24 @@ const KIND_COLOR: Record<string, string> = {
   mixin:     '#f59e0b',
 };
 
-const NODE_MAP: { label: string; id: string; kind: string }[] = [
-  { label: 'Animal',    id: 'animal',    kind: 'abstract' },
-  { label: 'IFlyable',  id: 'flyable',   kind: 'interface' },
-  { label: 'Swimmable', id: 'swimmable', kind: 'mixin' },
-  { label: 'Mammal',    id: 'mammal',    kind: 'abstract' },
-  { label: 'Bird',      id: 'bird',      kind: 'abstract' },
-  { label: 'Dog',       id: 'dog',       kind: 'concrete' },
-  { label: 'Dolphin',   id: 'dolphin',   kind: 'concrete' },
-  { label: 'Eagle',     id: 'eagle',     kind: 'concrete' },
-  { label: 'Penguin',   id: 'penguin',   kind: 'concrete' },
-];
-
-const NODE_PATTERN = new RegExp(
-  `\`(${NODE_MAP.map(n => n.label).join('|')})\`|(${NODE_MAP.map(n => n.label).join('|')})(?=[\\s.,;:!?)\\]|]|$)`,
-  'g'
-);
+const DEFAULT_NODE_MAP: NodeMapEntry[] = [];
 
 type TextPart = { type: 'text'; content: string } | { type: 'node'; label: string; id: string; kind: string };
 
-function parseContent(text: string): TextPart[] {
+function parseContent(text: string, nodeMap: NodeMapEntry[], pattern: RegExp): TextPart[] {
+  if (!nodeMap.length) return [{ type: 'text', content: text }];
   const parts: TextPart[] = [];
   let last = 0;
+  const re = new RegExp(pattern.source, pattern.flags);
+  re.lastIndex = 0;
   let match: RegExpExecArray | null;
-  NODE_PATTERN.lastIndex = 0;
 
-  while ((match = NODE_PATTERN.exec(text)) !== null) {
+  while ((match = re.exec(text)) !== null) {
     if (match.index > last) parts.push({ type: 'text', content: text.slice(last, match.index) });
     const label = match[1] ?? match[2];
-    const node = NODE_MAP.find(n => n.label === label)!;
-    parts.push({ type: 'node', label, id: node.id, kind: node.kind });
+    const node = nodeMap.find(n => n.label === label);
+    if (node) parts.push({ type: 'node', label, id: node.id, kind: node.kind });
+    else parts.push({ type: 'text', content: match[0] });
     last = match.index + match[0].length;
   }
   if (last < text.length) parts.push({ type: 'text', content: text.slice(last) });
@@ -67,6 +58,7 @@ interface ChatPanelProps {
   onSend: (text: string, contextNode: NodeInfo | null) => void;
   onClear: () => void;
   onFocusNode: (id: string) => void;
+  nodeMap?: NodeMapEntry[];
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -92,10 +84,25 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export default function ChatPanel({ messages, onSend, onClear, onFocusNode }: ChatPanelProps) {
+export default function ChatPanel({ messages, onSend, onClear, onFocusNode, nodeMap }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const effectiveNodeMap = nodeMap?.length ? nodeMap : DEFAULT_NODE_MAP;
+  const nodePattern = useMemo(() => {
+    if (!effectiveNodeMap.length) return /(?!)/g;
+    const labels = effectiveNodeMap.map(n => n.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp(
+      `\`(${labels.join('|')})\`|(${labels.join('|')})(?=[\\s.,;:!?)\\]|]|$)`,
+      'g'
+    );
+  }, [effectiveNodeMap]);
+
+  const doParse = useCallback(
+    (text: string) => parseContent(text, effectiveNodeMap, nodePattern),
+    [effectiveNodeMap, nodePattern]
+  );
 
   const lastContextNode = [...messages].reverse().find(m => m.role === 'node-context')?.node ?? null;
   const isStreaming = messages.some(m => m.isStreaming);
@@ -200,7 +207,7 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode }: Ch
             <div key={msg.id} className="flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
               <div className="flex justify-start group">
                 <div className="max-w-[90%] bg-white/[0.04] rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-gray-300 leading-relaxed relative">
-                  {parseContent(msg.content).map((part, i) =>
+                  {doParse(msg.content).map((part, i) =>
                     part.type === 'text' ? (
                       <span key={i}>{part.content}</span>
                     ) : (
@@ -210,9 +217,9 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode }: Ch
                         title={`Go to ${part.label}`}
                         className="inline-flex items-center gap-0.5 mx-0.5 px-1.5 py-0.5 rounded font-mono text-xs font-semibold transition-all hover:scale-105 active:scale-95"
                         style={{
-                          color: KIND_COLOR[part.kind],
-                          background: `${KIND_COLOR[part.kind]}15`,
-                          border: `1px solid ${KIND_COLOR[part.kind]}30`,
+                          color: KIND_COLOR[part.kind] ?? '#00e5ff',
+                          background: `${KIND_COLOR[part.kind] ?? '#00e5ff'}15`,
+                          border: `1px solid ${KIND_COLOR[part.kind] ?? '#00e5ff'}30`,
                         }}
                       >
                         {part.label}
@@ -228,6 +235,18 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode }: Ch
                   {!msg.isStreaming && msg.content && (
                     <div className="absolute -top-2 -right-2">
                       <CopyButton text={msg.content} />
+                    </div>
+                  )}
+                  {msg.citations && msg.citations.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-white/5">
+                      <div className="text-[9px] text-gray-600 uppercase tracking-widest mb-1">References</div>
+                      <div className="flex flex-wrap gap-1">
+                        {msg.citations.map(c => (
+                          <span key={c} className="text-[10px] font-mono text-gray-600 bg-white/5 px-1.5 py-0.5 rounded">
+                            {c.split('/').pop()}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>

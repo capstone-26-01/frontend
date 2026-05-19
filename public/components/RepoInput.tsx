@@ -7,11 +7,14 @@ interface RepoInputProps {
   value: string;
   onChange: (value: string) => void;
   onAnalyze?: (repo: string) => void;
+  loading?: boolean;
+  loadingText?: string;
+  error?: string | null;
 }
 
-export default function RepoInput({ value, onChange, onAnalyze }: RepoInputProps) {
+export default function RepoInput({ value, onChange, onAnalyze, loading, loadingText, error }: RepoInputProps) {
   const handleAnalyze = () => {
-    if (value.trim()) onAnalyze?.(value.trim());
+    if (value.trim() && !loading) onAnalyze?.(value.trim());
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -33,16 +36,22 @@ export default function RepoInput({ value, onChange, onAnalyze }: RepoInputProps
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            className="flex-1 min-w-0 bg-transparent py-4 outline-none font-mono text-sm text-[#00e5ff] placeholder:text-gray-700"
+            disabled={loading}
+            className="flex-1 min-w-0 bg-transparent py-4 outline-none font-mono text-sm text-[#00e5ff] placeholder:text-gray-700 disabled:opacity-50"
           />
           <button
             onClick={handleAnalyze}
-            className="shrink-0 bg-[#00e5ff] text-black px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-white hover:scale-[0.98] active:scale-95 transition-all"
+            disabled={loading || !value.trim()}
+            className="shrink-0 bg-[#00e5ff] text-black px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-white hover:scale-[0.98] active:scale-95 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
-            Analyze
+            {loading ? (loadingText ?? 'Analyzing…') : 'Analyze'}
           </button>
         </div>
       </div>
+
+      {error && (
+        <p className="text-xs font-mono text-red-400/80 text-center">{error}</p>
+      )}
 
       <div className="flex items-center gap-2">
         <span className="text-[10px] font-mono text-gray-700 uppercase tracking-widest">Try:</span>
@@ -50,7 +59,8 @@ export default function RepoInput({ value, onChange, onAnalyze }: RepoInputProps
           <button
             key={repo}
             onClick={() => { onChange(repo); onAnalyze?.(repo); }}
-            className="text-[10px] font-mono text-gray-500 hover:text-[#00e5ff] border border-white/5 hover:border-[#00e5ff]/30 px-2.5 py-1 rounded-full transition-all"
+            disabled={loading}
+            className="text-[10px] font-mono text-gray-500 hover:text-[#00e5ff] border border-white/5 hover:border-[#00e5ff]/30 px-2.5 py-1 rounded-full transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {repo}
           </button>
