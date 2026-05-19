@@ -6,9 +6,12 @@ interface HeroSectionProps {
   repo: string;
   onRepoChange: (value: string) => void;
   onAnalyze?: (repo: string) => void;
+  loading?: boolean;
+  loadingText?: string;
+  error?: string | null;
 }
 
-export default function HeroSection({ repo, onRepoChange, onAnalyze }: HeroSectionProps) {
+export default function HeroSection({ repo, onRepoChange, onAnalyze, loading, loadingText, error }: HeroSectionProps) {
   return (
     <section className="relative pt-44 pb-20 px-6 flex flex-col items-center text-center z-10">
       <div className="mb-8 flex items-center gap-2 px-3 py-1 rounded-full border border-[#00e5ff]/30 bg-[#00e5ff]/5 text-[10px] font-mono font-bold text-[#00e5ff]">
@@ -33,7 +36,7 @@ export default function HeroSection({ repo, onRepoChange, onAnalyze }: HeroSecti
         See how files connect and where to start — instantly.
       </p>
 
-      <RepoInput value={repo} onChange={onRepoChange} onAnalyze={onAnalyze} />
+      <RepoInput value={repo} onChange={onRepoChange} onAnalyze={onAnalyze} loading={loading} loadingText={loadingText} error={error} />
     </section>
   );
 }
