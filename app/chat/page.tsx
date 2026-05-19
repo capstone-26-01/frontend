@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import GraphFlow from '@/public/components/GraphFlow';
@@ -22,7 +22,7 @@ const INITIAL_MESSAGES: Message[] = [{
   content: 'Graph loaded. Click any node on the left to explore it, or ask me anything about this codebase.',
 }];
 
-export default function ChatPage() {
+function ChatContent() {
   const searchParams = useSearchParams();
   const analysisId = searchParams.get('analysis_id') ? Number(searchParams.get('analysis_id')) : null;
   const repoName = searchParams.get('repo') ?? '';
@@ -250,5 +250,27 @@ export default function ChatPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense fallback={
+      <div className="h-screen bg-[#05070a] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div style={{
+            width: 32, height: 32,
+            border: '2px solid #00e5ff33',
+            borderTopColor: '#00e5ff',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+          }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <span className="text-xs font-mono text-[#00e5ff88]">Loading…</span>
+        </div>
+      </div>
+    }>
+      <ChatContent />
+    </Suspense>
   );
 }
