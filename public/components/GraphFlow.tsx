@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useState, useMemo, useRef, useEffect } from 'react';
+import React, { useCallback, useState, useMemo, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import ReactFlow, {
   Background as _Background,
   Controls as _Controls,
@@ -40,6 +40,10 @@ export interface NodeInfo {
   properties?: string[];
 }
 
+export interface GraphFlowHandle {
+  focusNode: (id: string) => void;
+}
+
 interface GraphFlowProps {
   onNodeSelect?: (node: NodeInfo) => void;
 }
@@ -69,6 +73,7 @@ const KIND_THEME: Record<NodeKind, {
 interface ClassNodeData extends ClassData {
   dimmed?: boolean;
   highlighted?: boolean;
+  flashing?: boolean;
 }
 
 function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
@@ -83,7 +88,9 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
         border: `1.5px solid ${selected || data.highlighted ? theme.border : theme.border + '55'}`,
         borderRadius: 14,
         minWidth: 190,
-        boxShadow: selected || data.highlighted ? theme.glow : 'none',
+        boxShadow: data.flashing
+          ? `0 0 0 4px ${theme.border}50, 0 0 32px ${theme.border}60`
+          : (selected || data.highlighted ? theme.glow : 'none'),
         transition: 'all 0.18s ease',
         opacity,
         transform: `scale(${scale})`,
@@ -507,7 +514,7 @@ function Toolbar({
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
-function GraphFlowInner({ onNodeSelect }: GraphFlowProps) {
+const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect }, ref) {
   const { setCenter, getNode } = useReactFlow();
 
   // ── State ──────────────────────────────────
@@ -517,6 +524,17 @@ function GraphFlowInner({ onNodeSelect }: GraphFlowProps) {
   const [hoveredId,    setHoveredId]    = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<Node<ClassData> | null>(null);
   const [pathIds,      setPathIds]      = useState<Set<string> | null>(null);
+  const [flashId,      setFlashId]      = useState<string | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    focusNode: (id: string) => {
+      const rfNode = getNode(id);
+      if (!rfNode) return;
+      setCenter(rfNode.position.x + NODE_W / 2, rfNode.position.y + NODE_H / 2, { zoom: 1.4, duration: 500 });
+      setFlashId(id);
+      setTimeout(() => setFlashId(null), 1500);
+    },
+  }), [getNode, setCenter]);
 
   // ② Edge filter
   const [activeEdgeKinds, setActiveEdgeKinds] = useState<Set<EdgeKind>>(
@@ -588,9 +606,10 @@ function GraphFlowInner({ onNodeSelect }: GraphFlowProps) {
         highlighted = pathIds.has(n.id);
       }
 
-      return { ...n, data: { ...n.data, dimmed, highlighted } };
+      const flashing = n.id === flashId;
+      return { ...n, data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing } };
     });
-  }, [nodes, hoveredId, pathIds, visibleEdges]);
+  }, [nodes, hoveredId, pathIds, visibleEdges, flashId]);
 
   // Edge dim on hover / path
   const displayEdges = useMemo(() => {
@@ -712,16 +731,17 @@ function GraphFlowInner({ onNodeSelect }: GraphFlowProps) {
       <DetailPanel node={selectedNode} />
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────
 // Export: wrap with ReactFlowProvider
 // ─────────────────────────────────────────────
 
-export default function GraphFlow({ onNodeSelect }: GraphFlowProps = {}) {
+const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect }, ref) {
   return (
     <ReactFlowProvider>
-      <GraphFlowInner onNodeSelect={onNodeSelect} />
+      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} />
     </ReactFlowProvider>
   );
-}
+});
+export default GraphFlow;
