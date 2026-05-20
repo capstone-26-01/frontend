@@ -18,6 +18,9 @@ import ReactFlow, {
   Position,
   NodeProps,
   MarkerType,
+  getBezierPath,
+  BaseEdge as _BaseEdge,
+  EdgeProps,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 // npm install dagre @types/dagre
@@ -26,6 +29,7 @@ import dagre from 'dagre';
 const Background = _Background as any;
 const Controls = _Controls as any;
 const MiniMap = _MiniMap as any;
+const BaseEdge = _BaseEdge as any;
 
 // ─────────────────────────────────────────────
 // Types & Theme
@@ -53,6 +57,19 @@ interface GraphFlowProps {
 }
 type EdgeKind = string;
 type LayoutDir = 'TB' | 'LR' | 'radial';
+type ViewLevel = 'file' | 'class' | 'function';
+
+const LEVEL_NODE_KINDS: Record<ViewLevel, Set<string>> = {
+  file:     new Set(['module']),
+  class:    new Set(['module', 'class', 'abstract', 'interface', 'concrete', 'mixin']),
+  function: new Set(['module', 'class', 'abstract', 'interface', 'concrete', 'mixin', 'function']),
+};
+
+const LEVEL_EDGE_KINDS: Record<ViewLevel, string[]> = {
+  file:     ['contains'],
+  class:    ['contains', 'inherits', 'imports'],
+  function: ['contains', 'inherits', 'imports', 'calls', 'entrypoint'],
+};
 
 interface ClassData {
   label: string;
@@ -151,6 +168,7 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
 }
 
 const nodeTypes = { classNode: ClassNode };
+const edgeTypes = { bundledEdge: BundledEdge };
 
 // ─────────────────────────────────────────────
 // Raw graph data
@@ -212,18 +230,82 @@ const EDGE_PALETTE: Record<string, { color: string; dash?: string; width?: numbe
 };
 const EDGE_DEFAULT = { color: '#7a8a9e', width: 1 };
 
+const EDGE_BASE_OPACITY: Record<string, number> = {
+  contains:   1.0,
+  inherits:   1.0,
+  extends:    1.0,
+  implements: 0.85,
+  imports:    0.55,
+  calls:      0.5,
+  mixin:      0.75,
+  entrypoint: 1.0,
+};
+
+// ─────────────────────────────────────────────
+// BundledEdge: edges from the same source share a trunk point
+// ─────────────────────────────────────────────
+
+const BUNDLE_OFFSET = 64;
+
+function BundledEdge({
+  sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition,
+  data, style, markerEnd,
+  label, labelStyle, labelBgStyle, labelBgPadding, labelBgBorderRadius,
+}: EdgeProps) {
+  let edgePath: string;
+  let labelX: number;
+  let labelY: number;
+
+  if (data?.bundled) {
+    // All edges from the same source share (sourceX, sourceY + BUNDLE_OFFSET) as the trunk point.
+    // The first bezier segment is identical for all siblings → visually merges into one line.
+    const bx = sourceX;
+    const by = sourceY + BUNDLE_OFFSET;
+    const mid = (by + targetY) / 2;
+    edgePath = [
+      `M ${sourceX} ${sourceY}`,
+      `C ${sourceX} ${sourceY + BUNDLE_OFFSET * 0.85},`,
+      `${bx} ${by - BUNDLE_OFFSET * 0.15},`,
+      `${bx} ${by}`,
+      `C ${bx} ${mid},`,
+      `${targetX} ${mid},`,
+      `${targetX} ${targetY}`,
+    ].join(' ');
+    labelX = (bx + targetX) / 2;
+    labelY = mid;
+  } else {
+    [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+  }
+
+  return (
+    <BaseEdge
+      path={edgePath}
+      style={style}
+      markerEnd={markerEnd}
+      label={label}
+      labelX={labelX}
+      labelY={labelY}
+      labelStyle={labelStyle}
+      labelBgStyle={labelBgStyle}
+      labelBgPadding={labelBgPadding as [number, number] | undefined}
+      labelBgBorderRadius={labelBgBorderRadius}
+    />
+  );
+}
+
 function getEdgeStyle(kind: string) {
   const p = EDGE_PALETTE[kind] ?? EDGE_DEFAULT;
   return {
     data: { kind },
     style: {
-      stroke: p.color + 'bb',
+      stroke: p.color,
       strokeWidth: p.width ?? 1.5,
       strokeDasharray: p.dash,
     },
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      color: p.color + 'dd',
+      color: p.color,
       width: 12, height: 12,
     },
     label: kind,
@@ -263,6 +345,26 @@ function getNeighborIds(nodeId: string, edges: Edge[]): Set<string> {
     if (e.target === nodeId) ids.add(e.source);
   });
   return ids;
+}
+
+// ─────────────────────────────────────────────
+// ② Depth-limited BFS from a node
+// ─────────────────────────────────────────────
+
+const MAX_DEPTH = 5;
+
+function getNodesWithinDepth(startId: string, edges: Edge[], maxDepth: number): Set<string> {
+  const visited = new Set<string>([startId]);
+  const queue: Array<{ id: string; d: number }> = [{ id: startId, d: 0 }];
+  while (queue.length) {
+    const { id: cur, d } = queue.shift()!;
+    if (d >= maxDepth) continue;
+    edges.forEach((e) => {
+      if (e.source === cur && !visited.has(e.target)) { visited.add(e.target); queue.push({ id: e.target, d: d + 1 }); }
+      if (e.target === cur && !visited.has(e.source)) { visited.add(e.source); queue.push({ id: e.source, d: d + 1 }); }
+    });
+  }
+  return visited;
 }
 
 // ─────────────────────────────────────────────
@@ -488,13 +590,23 @@ function Toolbar({
   layout,
   onLayout,
   matchCount,
+  viewLevel,
+  onViewLevel,
 }: {
   query: string;
   onQuery: (q: string) => void;
   layout: LayoutDir;
   onLayout: (l: LayoutDir) => void;
   matchCount: number;
+  viewLevel: ViewLevel;
+  onViewLevel: (l: ViewLevel) => void;
 }) {
+  const views: { id: ViewLevel; label: string; icon: string }[] = [
+    { id: 'file',     label: 'File',  icon: '◈' },
+    { id: 'class',    label: 'Class', icon: '⬢' },
+    { id: 'function', label: 'Func',  icon: 'ƒ' },
+  ];
+
   const layouts: { id: LayoutDir; label: string; icon: string }[] = [
     { id: 'TB',     label: 'Top–Down', icon: '⬇' },
     { id: 'LR',     label: 'Left–Right', icon: '➡' },
@@ -537,6 +649,30 @@ function Toolbar({
 
       <div style={{ width: 1, height: 20, background: '#ffffff10' }} />
 
+      {/* View level buttons */}
+      {views.map(({ id, label, icon }) => (
+        <button
+          key={id}
+          title={`${label} view`}
+          onClick={() => onViewLevel(id)}
+          style={{
+            background: viewLevel === id ? '#00e5ff18' : 'transparent',
+            border: `1px solid ${viewLevel === id ? '#00e5ff55' : 'transparent'}`,
+            borderRadius: 7, padding: '4px 9px',
+            color: viewLevel === id ? '#00e5ff' : '#6b7280',
+            fontSize: 10, cursor: 'pointer',
+            fontFamily: 'inherit', transition: 'all 0.15s',
+            display: 'flex', alignItems: 'center', gap: 4,
+            fontWeight: viewLevel === id ? 700 : 400,
+          }}
+        >
+          <span style={{ fontSize: 11 }}>{icon}</span>
+          <span>{label}</span>
+        </button>
+      ))}
+
+      <div style={{ width: 1, height: 20, background: '#ffffff10' }} />
+
       {/* Layout buttons */}
       {layouts.map(({ id, label, icon }) => (
         <button
@@ -557,6 +693,7 @@ function Toolbar({
           <span style={{ fontSize: 10 }}>{label}</span>
         </button>
       ))}
+
     </div>
   );
 }
@@ -566,7 +703,7 @@ function Toolbar({
 // ─────────────────────────────────────────────
 
 const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect, apiNodes, apiEdges, loading }, ref) {
-  const { setCenter, getNode } = useReactFlow();
+  const { setCenter, getNode, fitView } = useReactFlow();
 
   // ── State ──────────────────────────────────
   const [nodes, setNodes, onNodesChange] = useNodesState(RAW_NODES as any);
@@ -587,9 +724,12 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     },
   }), [getNode, setCenter]);
 
+  // View level
+  const [viewLevel, setViewLevel] = useState<ViewLevel>('file');
+
   // ② Edge filter
   const [activeEdgeKinds, setActiveEdgeKinds] = useState<Set<EdgeKind>>(
-    new Set(['extends', 'implements', 'mixin'])
+    new Set(['contains'])
   );
 
   // ③ Search
@@ -626,6 +766,20 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     });
   }, []);
 
+  const handleViewLevel = useCallback((level: ViewLevel) => {
+    setViewLevel(level);
+    setActiveEdgeKinds(new Set(LEVEL_EDGE_KINDS[level]));
+  }, []);
+
+  // ─────────────────────────────────────────
+  // Level filter: which node IDs to hide based on viewLevel
+  // ─────────────────────────────────────────
+  const hiddenNodeIdsByLevel = useMemo(() => {
+    const allowed = LEVEL_NODE_KINDS[viewLevel];
+    return new Set(nodes.filter(n => !allowed.has((n.data as ClassData).kind)).map(n => n.id));
+  }, [nodes, viewLevel]);
+
+
   // ─────────────────────────────────────────
   // ① Hover focus
   // ─────────────────────────────────────────
@@ -657,6 +811,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   const displayNodes = useMemo(() => {
     return nodes.map((n) => {
+      const hiddenByLevel = hiddenNodeIdsByLevel.has(n.id);
+
       let dimmed = false;
       let highlighted = false;
 
@@ -670,30 +826,37 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       }
 
       const flashing = n.id === flashId;
-      return { ...n, data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing } };
+      return { ...n, hidden: hiddenByLevel, data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing } };
     });
-  }, [nodes, hoveredId, pathIds, visibleEdges, flashId]);
+  }, [nodes, hoveredId, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel]);
 
-  // Edge dim on hover / path
+  // Edge dim on hover / path + bundling + level filter + base opacity
   const displayEdges = useMemo(() => {
+    const sourceCounts: Record<string, number> = {};
+    visibleEdges.forEach((e) => { sourceCounts[e.source] = (sourceCounts[e.source] ?? 0) + 1; });
+
     return visibleEdges.map((e) => {
-      let opacity = 1;
+      const hiddenByLevel = hiddenNodeIdsByLevel.has(e.source) || hiddenNodeIdsByLevel.has(e.target);
+
+      const kind = e.data?.kind as string ?? '';
+      const baseOpacity = EDGE_BASE_OPACITY[kind] ?? 0.6;
+
+      let opacity = baseOpacity;
       if (hoveredId) {
-        const neighbors = getNeighborIds(hoveredId, visibleEdges);
-        const connected = e.source === hoveredId || e.target === hoveredId
-          || neighbors.has(e.source) || neighbors.has(e.target);
-        // only edges directly touching hovered node
         const direct = e.source === hoveredId || e.target === hoveredId;
-        opacity = direct ? 1 : 0.08;
+        opacity = direct ? 1 : 0.06;
       } else if (pathIds) {
-        opacity = pathIds.has(e.source) && pathIds.has(e.target) ? 1 : 0.08;
+        opacity = pathIds.has(e.source) && pathIds.has(e.target) ? baseOpacity : 0.06;
       }
       return {
         ...e,
+        type: 'bundledEdge',
+        hidden: hiddenByLevel,
+        data: { ...(e.data ?? {}), bundled: sourceCounts[e.source] > 1 },
         style: { ...e.style, opacity },
       };
     });
-  }, [visibleEdges, hoveredId, pathIds]);
+  }, [visibleEdges, hoveredId, pathIds, hiddenNodeIdsByLevel]);
 
   // ─────────────────────────────────────────
   // ③ Search: highlight + camera jump
@@ -723,6 +886,15 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   useEffect(() => {
     if (!query.trim()) setPathIds(null);
   }, [query]);
+
+  // ─────────────────────────────────────────
+  // fitView on view level / depth toggle
+  // ─────────────────────────────────────────
+  useEffect(() => {
+    const id = setTimeout(() => fitView({ padding: 0.15, duration: 450 }), 60);
+    return () => clearTimeout(id);
+  }, [viewLevel, fitView]);
+
 
   // ─────────────────────────────────────────
   // ④ Layout change
@@ -773,9 +945,9 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         ...getEdgeStyle(e.kind),
       }));
 
-    // 실제 엣지 kind 로 필터 초기화
-    const allKinds = new Set(rfEdges.map(e => e.data?.kind as EdgeKind).filter(Boolean));
-    if (allKinds.size > 0) setActiveEdgeKinds(allKinds);
+    // FILE VIEW 기본: contains 엣지만 활성, module 노드만 표시
+    setViewLevel('file');
+    setActiveEdgeKinds(new Set(['contains']));
 
     const laid = applyDagreLayout(rfNodes, rfEdges, 'TB');
     setNodes(laid as any);
@@ -817,12 +989,15 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         layout={layout}
         onLayout={applyLayout}
         matchCount={searchMatches.length}
+        viewLevel={viewLevel}
+        onViewLevel={handleViewLevel}
       />
 
       <ReactFlow
         nodes={displayNodes}
         edges={displayEdges}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
