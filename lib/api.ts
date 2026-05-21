@@ -21,7 +21,7 @@ export interface RepoGraphEdge {
   id?: string;
   source: string;
   target: string;
-  kind: 'extends' | 'implements' | 'mixin';
+  kind: 'extends' | 'implements' | 'mixin' | 'contains' | 'imports' | 'calls' | 'inherits' | 'entrypoint' | string;
 }
 
 export interface RepoGraphResponse {
