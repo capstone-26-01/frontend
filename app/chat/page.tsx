@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
+import TreePanel from '@/public/components/TreePanel';
 import { fetchGraph, fetchNodeSummary, postQA } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
@@ -33,6 +34,8 @@ function ChatContent() {
   const [nodeTrail, setNodeTrail] = useState<NodeInfo[]>([]);
   const [chatWidth, setChatWidth] = useState(380);
   const [collapsed, setCollapsed] = useState(false);
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const TREE_WIDTH = 220;
 
   const [apiNodes, setApiNodes] = useState<RepoGraphNode[] | null>(null);
   const [apiEdges, setApiEdges] = useState<RepoGraphEdge[] | null>(null);
@@ -200,6 +203,16 @@ function ChatContent() {
         <div className="flex items-center gap-3">
           <span className="text-[10px] font-mono text-gray-700 uppercase tracking-widest">GitStarter · Chat</span>
           <button
+            onClick={() => setTreeCollapsed(c => !c)}
+            title={treeCollapsed ? 'Show explorer' : 'Hide explorer'}
+            className="p-1.5 rounded-lg text-gray-600 hover:text-white hover:bg-white/5 transition-all"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M1 2h4M1 7h6M1 12h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              {treeCollapsed && <path d="M10 5l3 3-3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />}
+            </svg>
+          </button>
+          <button
             onClick={() => setCollapsed(c => !c)}
             title={collapsed ? 'Expand chat' : 'Collapse chat'}
             className="p-1.5 rounded-lg text-gray-600 hover:text-white hover:bg-white/5 transition-all"
@@ -216,7 +229,19 @@ function ChatContent() {
 
       {/* Split view */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left: Graph */}
+        {/* Left: Tree Explorer */}
+        <div
+          className="shrink-0 overflow-hidden transition-all duration-300 border-r border-white/5"
+          style={{ width: treeCollapsed ? 0 : TREE_WIDTH }}
+        >
+          <TreePanel
+            apiNodes={apiNodes}
+            apiEdges={apiEdges}
+            onFocusNode={handleFocusNode}
+          />
+        </div>
+
+        {/* Center: Graph */}
         <div className="flex-1 overflow-hidden">
           <GraphFlow
             ref={graphRef}
