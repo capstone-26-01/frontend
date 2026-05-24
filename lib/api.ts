@@ -271,6 +271,25 @@ export interface IssueRelatedNodesRequest {
   max_nodes?: number;
 }
 
+export interface IssueNodeInfo {
+  id: string;
+  kind: string;
+  label: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface IssueRelatedNodeCandidate {
+  rank: number;
+  score: number;
+  node_id: string;
+  node: IssueNodeInfo;
+  reason: string;
+  evidence: unknown[];
+}
+
 export interface IssueRelatedNodesResponse {
   analysis_id: number;
   repo: string;
@@ -280,7 +299,7 @@ export interface IssueRelatedNodesResponse {
   mock: boolean;
   issue: Partial<GithubIssue>;
   selected_node_ids: string[];
-  candidates: unknown[];
+  candidates: IssueRelatedNodeCandidate[];
   limits: { max_nodes: number };
   warnings: unknown[];
 }

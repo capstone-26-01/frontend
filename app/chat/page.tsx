@@ -7,7 +7,7 @@ import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
 import IssuePanel, { type Issue } from '@/public/components/IssuePanel';
-import { fetchGraph, fetchNodeSummary, postQA, fetchIssueRelatedNodes } from '@/lib/api';
+import { fetchGraph, fetchNodeSummary, postQA, fetchIssueRelatedNodes, type IssueRelatedNodeCandidate } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
@@ -44,19 +44,76 @@ function ChatContent() {
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [issueHighlightIds, setIssueHighlightIds] = useState<Set<string> | null>(null);
 
+  const fetchCandidateSummary = useCallback(async (candidate: IssueRelatedNodeCandidate, aId: number) => {
+    const nodeInfo: NodeInfo = {
+      id: candidate.node.id,
+      label: candidate.node.label,
+      kind: candidate.node.kind as NodeInfo['kind'],
+      methods: [],
+    };
+
+    setMessages(prev => [...prev, {
+      id: `ctx-issue-${candidate.node_id}-${Date.now()}`,
+      role: 'node-context',
+      content: '',
+      node: nodeInfo,
+    }]);
+
+    const summaryId = `ns-issue-${candidate.node_id}-${Date.now()}`;
+    setMessages(prev => [...prev, { id: summaryId, role: 'assistant', content: '', isStreaming: true }]);
+
+    try {
+      const summaryData = await fetchNodeSummary(aId, candidate.node_id);
+      const summary = typeof summaryData.summary === 'string'
+        ? summaryData.summary
+        : JSON.stringify(summaryData.summary, null, 2);
+      setMessages(prev => prev.map(m =>
+        m.id === summaryId ? { ...m, content: summary, isStreaming: false } : m
+      ));
+    } catch {
+      setMessages(prev => prev.map(m =>
+        m.id === summaryId
+          ? { ...m, content: `\`${candidate.node.label}\` 요약을 불러올 수 없습니다.`, isStreaming: false }
+          : m
+      ));
+    }
+  }, []);
+
   const handleSelectIssue = useCallback(async (issue: Issue | null) => {
     setSelectedIssue(issue);
     if (!issue || analysisId == null) {
       setIssueHighlightIds(null);
       return;
     }
+
+    if (chatCollapsed) setChatCollapsed(false);
+
     try {
       const data = await fetchIssueRelatedNodes({ analysis_id: analysisId, issue_number: issue.number });
       setIssueHighlightIds(new Set(data.selected_node_ids));
+
+      const candidates = data.candidates;
+      if (candidates.length === 0) return;
+
+      // 이슈 관련 노드 목록 intro 메시지
+      const nodeList = candidates
+        .map((c, i) => `${i + 1}. \`${c.node.label}\` — ${c.node.path}`)
+        .join('\n');
+      setMessages(prev => [...prev, {
+        id: `issue-intro-${Date.now()}`,
+        role: 'assistant',
+        content: `Issue #${issue.number} **${issue.title}** 관련 코드 노드 ${candidates.length}개:\n\n${nodeList}`,
+      }]);
+
+      // 상위 3개 candidates에 대해 node-context + summary
+      const top = candidates.slice(0, 3);
+      for (const candidate of top) {
+        await fetchCandidateSummary(candidate, analysisId);
+      }
     } catch {
       setIssueHighlightIds(null);
     }
-  }, [analysisId]);
+  }, [analysisId, chatCollapsed]);
 
   // Graph data
   const [apiNodes, setApiNodes] = useState<RepoGraphNode[] | null>(null);
