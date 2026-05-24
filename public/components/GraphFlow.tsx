@@ -54,6 +54,7 @@ interface GraphFlowProps {
   apiNodes?: RepoGraphNode[] | null;
   apiEdges?: RepoGraphEdge[] | null;
   loading?: boolean;
+  issueHighlightIds?: Set<string> | null;
 }
 type EdgeKind = string;
 type LayoutDir = 'TB' | 'LR' | 'radial';
@@ -702,7 +703,7 @@ function Toolbar({
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
-const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect, apiNodes, apiEdges, loading }, ref) {
+const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect, apiNodes, apiEdges, loading, issueHighlightIds }, ref) {
   const { setCenter, getNode, fitView } = useReactFlow();
 
   // ── State ──────────────────────────────────
@@ -820,6 +821,9 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         const neighbors = getNeighborIds(hoveredId, visibleEdges);
         dimmed = n.id !== hoveredId && !neighbors.has(n.id);
         highlighted = n.id === hoveredId || neighbors.has(n.id);
+      } else if (issueHighlightIds) {
+        dimmed = !issueHighlightIds.has(n.id);
+        highlighted = issueHighlightIds.has(n.id);
       } else if (pathIds) {
         dimmed = !pathIds.has(n.id);
         highlighted = pathIds.has(n.id);
@@ -845,6 +849,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       if (hoveredId) {
         const direct = e.source === hoveredId || e.target === hoveredId;
         opacity = direct ? 1 : 0.06;
+      } else if (issueHighlightIds) {
+        opacity = issueHighlightIds.has(e.source) && issueHighlightIds.has(e.target) ? baseOpacity : 0.04;
       } else if (pathIds) {
         opacity = pathIds.has(e.source) && pathIds.has(e.target) ? baseOpacity : 0.06;
       }
@@ -1036,10 +1042,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
 // Export: wrap with ReactFlowProvider
 // ─────────────────────────────────────────────
 
-const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect, apiNodes, apiEdges, loading }, ref) {
+const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect, apiNodes, apiEdges, loading, issueHighlightIds }, ref) {
   return (
     <ReactFlowProvider>
-      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} apiNodes={apiNodes} apiEdges={apiEdges} loading={loading} />
+      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} apiNodes={apiNodes} apiEdges={apiEdges} loading={loading} issueHighlightIds={issueHighlightIds} />
     </ReactFlowProvider>
   );
 });
