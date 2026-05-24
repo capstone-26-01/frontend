@@ -221,3 +221,87 @@ export async function createShare(req: ShareCreateRequest): Promise<ShareRespons
 export async function fetchShare(shareId: string): Promise<ShareResponse> {
   return apiFetch<ShareResponse>(`/api/share/${shareId}/`);
 }
+
+export interface IssueAuthor {
+  login: string;
+  avatar_url: string;
+  html_url: string;
+}
+
+export interface IssueLabel {
+  name: string;
+  color: string;
+  description: string;
+}
+
+export interface GithubIssue {
+  key: string;
+  number: number;
+  title: string;
+  state: string;
+  html_url: string;
+  author: IssueAuthor | null;
+  labels: IssueLabel[];
+  assignees: IssueAuthor[];
+  comments_count: number;
+  created_at: string;
+  updated_at: string;
+  body_excerpt: string;
+  body_truncated: boolean;
+  locked: boolean;
+  is_pull_request: boolean;
+}
+
+export interface IssueListResponse {
+  repo: string;
+  provider: string;
+  source: string;
+  mock: boolean;
+  state: string;
+  page: number;
+  per_page: number;
+  has_next_page: boolean;
+  next_page: number | null;
+  issues: GithubIssue[];
+}
+
+export interface IssueRelatedNodesRequest {
+  analysis_id: number;
+  issue_number: number;
+  max_nodes?: number;
+}
+
+export interface IssueRelatedNodesResponse {
+  analysis_id: number;
+  repo: string;
+  revision: string;
+  provider: string;
+  source: string;
+  mock: boolean;
+  issue: Partial<GithubIssue>;
+  selected_node_ids: string[];
+  candidates: unknown[];
+  limits: { max_nodes: number };
+  warnings: unknown[];
+}
+
+export async function fetchIssues(
+  repoUrl: string,
+  page?: number,
+  perPage?: number,
+): Promise<IssueListResponse> {
+  const params = new URLSearchParams({ url: toGithubUrl(repoUrl) });
+  if (page) params.set('page', String(page));
+  if (perPage) params.set('per_page', String(perPage));
+  return apiFetch<IssueListResponse>(`/api/issues/?${params}`);
+}
+
+export async function fetchIssueRelatedNodes(
+  req: IssueRelatedNodesRequest,
+): Promise<IssueRelatedNodesResponse> {
+  return apiFetch<IssueRelatedNodesResponse>('/api/issues/related-nodes/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
