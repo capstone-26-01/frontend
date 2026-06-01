@@ -1038,11 +1038,16 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         return next;
       });
     }
+    // Clicking the already-selected node deselects it
+    if (selectedNode?.id === node.id) {
+      setSelectedNode(null);
+      setPathIds(null);
+      return;
+    }
     setSelectedNode(node as Node<ClassData>);
-    const connected = getConnectedPath(node.id, edges);
-    setPathIds(connected);
+    setPathIds(getConnectedPath(node.id, edges));
     onNodeSelect?.({ id: node.id, ...(node.data as ClassData) });
-  }, [onNodeSelect, edges, hierarchy]);
+  }, [onNodeSelect, edges, hierarchy, selectedNode]);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNode(null);
