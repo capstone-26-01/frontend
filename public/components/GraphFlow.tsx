@@ -99,7 +99,7 @@ const KIND_THEME: Record<NodeKind, {
   method:   { border: '#6366f1', badge: '#6366f122', badgeText: '#a5b4fc', glow: '0 0 16px rgba(99,102,241,0.25)', icon: 'm' },
   external: { border: '#4b5563', badge: '#4b556322', badgeText: '#9ca3af', glow: '0 0 8px rgba(75,85,99,0.2)',   icon: '↗' },
   // 파일 트리 kind (분석 미지원 레포 등)
-  directory: { border: '#e3b341', badge: '#e3b34122', badgeText: '#f0c674', glow: '0 0 16px rgba(227,179,65,0.25)', icon: '▸' },
+  directory: { border: '#818cf8', badge: '#818cf822', badgeText: '#a5b4fc', glow: '0 0 16px rgba(129,140,248,0.25)', icon: '▸' },
   file:      { border: '#8b98a5', badge: '#8b98a51f', badgeText: '#c0c9d4', glow: '0 0 12px rgba(139,152,165,0.2)',  icon: '◦' },
 };
 
@@ -111,6 +111,8 @@ interface ClassNodeData extends ClassData {
   dimmed?: boolean;
   highlighted?: boolean;
   flashing?: boolean;
+  expandable?: boolean;
+  expanded?: boolean;
 }
 
 function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
@@ -138,7 +140,9 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
         }}
       >
         <Handle type="target" position={Position.Top} style={{ background: theme.border, border: 'none', width: 7, height: 7 }} />
-        <span style={{ fontSize: 14, color: theme.border, lineHeight: 1, flexShrink: 0 }}>{theme.icon}</span>
+        <span style={{ fontSize: 14, color: theme.border, lineHeight: 1, flexShrink: 0, width: 14, textAlign: 'center' }}>
+          {data.expandable ? (data.expanded ? '▾' : '▸') : theme.icon}
+        </span>
         <span style={{
           fontSize: 12.5, fontWeight: data.kind === 'directory' ? 700 : 500,
           color: data.kind === 'directory' ? '#f0f3f8' : '#c9d1d9',
@@ -146,6 +150,11 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
         }}>
           {data.label}
         </span>
+        {data.expandable && (
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: theme.badgeText, opacity: 0.7, flexShrink: 0 }}>
+            {data.expanded ? '' : '⋯'}
+          </span>
+        )}
         <Handle type="source" position={Position.Bottom} style={{ background: theme.border, border: 'none', width: 7, height: 7 }} />
       </div>
     );
@@ -597,25 +606,58 @@ function Legend({
 // DetailPanel
 // ─────────────────────────────────────────────
 
-function DetailPanel({ node }: { node: Node<ClassData> | null }) {
+function DetailPanel({ node, childStats, onFocus, onSummarize }: {
+  node: Node<ClassData> | null;
+  childStats: { folders: number; files: number } | null;
+  onFocus: () => void;
+  onSummarize: () => void;
+}) {
   if (!node) return null;
   const { label, kind, methods, properties } = node.data;
-  const t = KIND_THEME[kind];
+  const t = KIND_THEME[kind] ?? KIND_THEME.concrete;
+  const parentSegments = node.id.split('/').slice(0, -1);
+
+  const actionBtn: React.CSSProperties = {
+    flex: 1, fontSize: 9, fontFamily: '"JetBrains Mono", monospace',
+    color: '#9aa6b2', background: '#ffffff08', border: '1px solid #ffffff12',
+    borderRadius: 6, padding: '4px 6px', cursor: 'pointer', transition: 'all 0.15s',
+  };
+  const aEnter = (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = '#00e5ff'; e.currentTarget.style.borderColor = '#00e5ff44'; };
+  const aLeave = (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = '#9aa6b2'; e.currentTarget.style.borderColor = '#ffffff12'; };
+
   return (
     <div style={{
-      position: 'absolute', top: 72, right: 16, zIndex: 10,
+      position: 'absolute', top: 64, right: 16, zIndex: 10,
       background: '#0b0d14ee', border: `1px solid ${t.border}33`,
-      borderRadius: 14, padding: '14px 18px', minWidth: 200, maxWidth: 240,
+      borderRadius: 11, padding: '10px 12px', minWidth: 170, maxWidth: 220,
       backdropFilter: 'blur(12px)',
       fontFamily: '"JetBrains Mono", monospace',
       boxShadow: t.glow,
       transition: 'all 0.2s ease',
     }}>
-      <div style={{ fontSize: 9, color: t.badgeText, letterSpacing: '0.12em', marginBottom: 6, textTransform: 'uppercase' }}>
+      {/* Path breadcrumb */}
+      {parentSegments.length > 0 && (
+        <div style={{ fontSize: 9, color: '#6b7787', marginBottom: 5, lineHeight: 1.4, wordBreak: 'break-all' }}>
+          {parentSegments.map((s, i) => (
+            <span key={i}>{i > 0 && <span style={{ opacity: 0.45 }}> › </span>}{s}</span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ fontSize: 8, color: t.badgeText, letterSpacing: '0.12em', marginBottom: 3, textTransform: 'uppercase' }}>
         {t.icon} {kind}
       </div>
-      <div style={{ fontSize: 14, fontWeight: 700, color: '#e8eaf0', marginBottom: 10 }}>{label}</div>
-      {properties && (
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: '#e8eaf0', marginBottom: 7, wordBreak: 'break-all', lineHeight: 1.25 }}>{label}</div>
+
+      {/* Directory child stats */}
+      {childStats && (childStats.folders + childStats.files) > 0 && (
+        <div style={{ fontSize: 9.5, color: '#94a3b8', marginBottom: 7, display: 'flex', gap: 10 }}>
+          <span style={{ color: '#a5b4fc' }}>▸ {childStats.folders} {childStats.folders === 1 ? 'folder' : 'folders'}</span>
+          <span style={{ color: '#c0c9d4' }}>◦ {childStats.files} {childStats.files === 1 ? 'file' : 'files'}</span>
+        </div>
+      )}
+
+      {properties && properties.length > 0 && (
         <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>PROPERTIES</div>
           {properties.map(p => (
@@ -626,7 +668,7 @@ function DetailPanel({ node }: { node: Node<ClassData> | null }) {
         </div>
       )}
       {methods && methods.length > 0 && (
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>METHODS</div>
           {methods.map(m => (
             <div key={m} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.8 }}>
@@ -635,6 +677,12 @@ function DetailPanel({ node }: { node: Node<ClassData> | null }) {
           ))}
         </div>
       )}
+
+      {/* Quick actions */}
+      <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
+        <button style={actionBtn} onMouseEnter={aEnter} onMouseLeave={aLeave} onClick={onFocus}>Focus</button>
+        <button style={actionBtn} onMouseEnter={aEnter} onMouseLeave={aLeave} onClick={onSummarize}>Summarize</button>
+      </div>
     </div>
   );
 }
@@ -825,6 +873,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   const [selectedNode, setSelectedNode] = useState<Node<ClassData> | null>(null);
   const [pathIds,      setPathIds]      = useState<Set<string> | null>(null);
   const [flashId,      setFlashId]      = useState<string | null>(null);
+  // Collapsible tree: set of expanded parent ids (children visible only when all ancestors expanded)
+  const [expandedIds,  setExpandedIds]  = useState<Set<string>>(new Set());
 
   useImperativeHandle(ref, () => ({
     focusNode: (id: string) => {
@@ -866,6 +916,74 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     () => !CODE_KINDS.some(k => presentNodeKinds.has(k)),
     [presentNodeKinds]
   );
+
+  // ─────────────────────────────────────────
+  // Hierarchy (from 'contains' edges) for collapse/expand
+  // ─────────────────────────────────────────
+  const hierarchy = useMemo(() => {
+    const parentMap = new Map<string, string>();
+    const childrenMap = new Map<string, string[]>();
+    const hasChildren = new Set<string>();
+    for (const e of edges) {
+      if (e.data?.kind !== 'contains') continue;
+      parentMap.set(e.target, e.source);
+      hasChildren.add(e.source);
+      if (!childrenMap.has(e.source)) childrenMap.set(e.source, []);
+      childrenMap.get(e.source)!.push(e.target);
+    }
+    return { parentMap, childrenMap, hasChildren };
+  }, [edges]);
+
+  const kindById = useMemo(
+    () => new Map(nodes.map(n => [n.id, (n.data as ClassData).kind as string])),
+    [nodes]
+  );
+
+  // A node is hidden when any ancestor is collapsed
+  const collapsedHiddenIds = useMemo(() => {
+    const { parentMap } = hierarchy;
+    const hidden = new Set<string>();
+    for (const n of nodes) {
+      let cur = parentMap.get(n.id);
+      while (cur !== undefined) {
+        if (!expandedIds.has(cur)) { hidden.add(n.id); break; }
+        cur = parentMap.get(cur);
+      }
+    }
+    return hidden;
+  }, [nodes, hierarchy, expandedIds]);
+
+  // Re-run layout over only the visible nodes (kind filter + expanded ancestors)
+  const layoutVisible = useCallback((dir: LayoutDir, expanded: Set<string>, level: ViewLevel) => {
+    const allowed = LEVEL_NODE_KINDS[level];
+    const { parentMap } = hierarchy;
+    const isVisible = (id: string, kind: string) => {
+      if (!allowed.has(kind)) return false;
+      let cur = parentMap.get(id);
+      while (cur !== undefined) {
+        if (!expanded.has(cur)) return false;
+        cur = parentMap.get(cur);
+      }
+      return true;
+    };
+    setNodes(prev => {
+      const visNodes = prev.filter(n => isVisible(n.id, (n.data as ClassData).kind));
+      const visIds = new Set(visNodes.map(n => n.id));
+      const visEdges = edges.filter(e => visIds.has(e.source) && visIds.has(e.target));
+      const laid = dir === 'radial'
+        ? applyRadialLayout(visNodes as Node[], visEdges)
+        : applyDagreLayout(visNodes as Node[], visEdges, dir);
+      const pos = new Map(laid.map(n => [n.id, n.position]));
+      return prev.map(n => (pos.has(n.id) ? { ...n, position: pos.get(n.id)! } : n));
+    });
+  }, [hierarchy, edges, setNodes]);
+
+  // Recompute layout + refit whenever expansion / view / layout changes
+  useEffect(() => {
+    layoutVisible(layout, expandedIds, viewLevel);
+    const t = setTimeout(() => fitView({ padding: 0.2, duration: 450 }), 90);
+    return () => clearTimeout(t);
+  }, [expandedIds, viewLevel, layout, layoutVisible, fitView]);
 
   // activeEdgeKinds가 비어있으면(초기값) 전체 허용
   const visibleEdges = useMemo(
@@ -912,23 +1030,53 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ③ Path tracing on click
   // ─────────────────────────────────────────
   const handleNodeClick = useCallback((_: any, node: Node) => {
+    // Toggle expand/collapse for nodes that have children
+    if (hierarchy.hasChildren.has(node.id)) {
+      setExpandedIds(prev => {
+        const next = new Set(prev);
+        next.has(node.id) ? next.delete(node.id) : next.add(node.id);
+        return next;
+      });
+    }
     setSelectedNode(node as Node<ClassData>);
     const connected = getConnectedPath(node.id, edges);
     setPathIds(connected);
     onNodeSelect?.({ id: node.id, ...(node.data as ClassData) });
-  }, [onNodeSelect, edges]);
+  }, [onNodeSelect, edges, hierarchy]);
 
   const handlePaneClick = useCallback(() => {
     setSelectedNode(null);
     setPathIds(null);
   }, []);
 
+  // Direct-children stats for the selected node (for the detail panel)
+  const selectedStats = useMemo(() => {
+    if (!selectedNode) return null;
+    const kids = hierarchy.childrenMap.get(selectedNode.id);
+    if (!kids || kids.length === 0) return null;
+    let folders = 0, files = 0;
+    for (const cid of kids) {
+      (kindById.get(cid) === 'directory') ? folders++ : files++;
+    }
+    return { folders, files };
+  }, [selectedNode, hierarchy, kindById]);
+
+  const focusSelected = useCallback(() => {
+    if (!selectedNode) return;
+    const rf = getNode(selectedNode.id);
+    if (rf) setCenter(rf.position.x + NODE_W / 2, rf.position.y + 23, { zoom: 1.2, duration: 450 });
+  }, [selectedNode, getNode, setCenter]);
+
+  const summarizeSelected = useCallback(() => {
+    if (selectedNode) onNodeSelect?.({ id: selectedNode.id, ...(selectedNode.data as ClassData) });
+  }, [selectedNode, onNodeSelect]);
+
   // ─────────────────────────────────────────
   // Merge: dimmed / highlighted state into node data
   // ─────────────────────────────────────────
   const displayNodes = useMemo(() => {
     return nodes.map((n) => {
-      const hiddenByLevel = hiddenNodeIdsByLevel.has(n.id);
+      const hidden = hiddenNodeIdsByLevel.has(n.id) || collapsedHiddenIds.has(n.id);
 
       let dimmed = false;
       let highlighted = false;
@@ -946,9 +1094,14 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       }
 
       const flashing = n.id === flashId;
-      return { ...n, hidden: hiddenByLevel, data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing } };
+      const expandable = hierarchy.hasChildren.has(n.id);
+      return {
+        ...n,
+        hidden,
+        data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing, expandable, expanded: expandable && expandedIds.has(n.id) },
+      };
     });
-  }, [nodes, hoveredId, issueHighlightIds, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel]);
+  }, [nodes, hoveredId, issueHighlightIds, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel, collapsedHiddenIds, hierarchy, expandedIds]);
 
   // Edge dim on hover / path + bundling + level filter + base opacity
   const displayEdges = useMemo(() => {
@@ -956,7 +1109,9 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     visibleEdges.forEach((e) => { sourceCounts[e.source] = (sourceCounts[e.source] ?? 0) + 1; });
 
     return visibleEdges.map((e) => {
-      const hiddenByLevel = hiddenNodeIdsByLevel.has(e.source) || hiddenNodeIdsByLevel.has(e.target);
+      const hiddenByLevel =
+        hiddenNodeIdsByLevel.has(e.source) || hiddenNodeIdsByLevel.has(e.target) ||
+        collapsedHiddenIds.has(e.source) || collapsedHiddenIds.has(e.target);
 
       const kind = e.data?.kind as string ?? '';
       const baseOpacity = EDGE_BASE_OPACITY[kind] ?? 0.6;
@@ -978,7 +1133,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         style: { ...e.style, opacity },
       };
     });
-  }, [visibleEdges, hoveredId, issueHighlightIds, pathIds, hiddenNodeIdsByLevel]);
+  }, [visibleEdges, hoveredId, issueHighlightIds, pathIds, hiddenNodeIdsByLevel, collapsedHiddenIds]);
 
   // ─────────────────────────────────────────
   // ③ Search: highlight + camera jump
@@ -1010,14 +1165,6 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   }, [query]);
 
   // ─────────────────────────────────────────
-  // fitView on view level / depth toggle
-  // ─────────────────────────────────────────
-  useEffect(() => {
-    const id = setTimeout(() => fitView({ padding: 0.15, duration: 450 }), 60);
-    return () => clearTimeout(id);
-  }, [viewLevel, fitView]);
-
-  // ─────────────────────────────────────────
   // Focus camera on issue-related nodes when an issue is selected
   // ─────────────────────────────────────────
   useEffect(() => {
@@ -1036,16 +1183,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   // ④ Layout change
   // ─────────────────────────────────────────
-  const applyLayout = useCallback((dir: LayoutDir) => {
-    setLayout(dir);
-    let next: Node[];
-    if (dir === 'radial') {
-      next = applyRadialLayout([...nodes], edges);
-    } else {
-      next = applyDagreLayout([...nodes], edges, dir);
-    }
-    setNodes(next as any);
-  }, [nodes, edges, setNodes]);
+  // Layout is recomputed (over visible nodes) by the effect that watches `layout`.
+  const applyLayout = useCallback((dir: LayoutDir) => setLayout(dir), []);
 
   // Initialise layout once on mount with RAW data
   const didInit = useRef(false);
@@ -1086,6 +1225,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     const hasCode = apiNodes.some(n => CODE_KINDS.includes(n.kind));
     setViewLevel(hasCode ? 'file' : 'folders');
     setActiveEdgeKinds(new Set(['contains']));
+
+    // 초기 펼침: 파일 트리는 접힌 채(최상위만), 코드 그래프는 전체 펼침(기존 동작 유지)
+    const parentIds = new Set(rfEdges.filter(e => e.data?.kind === 'contains').map(e => e.source));
+    setExpandedIds(hasCode ? parentIds : new Set());
 
     const laid = applyDagreLayout(rfNodes, rfEdges, 'TB');
     setNodes(laid as any);
@@ -1163,7 +1306,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       />
 
       {/* ③ Detail panel */}
-      <DetailPanel node={selectedNode} />
+      <DetailPanel node={selectedNode} childStats={selectedStats} onFocus={focusSelected} onSummarize={summarizeSelected} />
     </div>
   );
 });

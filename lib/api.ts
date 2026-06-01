@@ -92,12 +92,32 @@ export interface ShareResponse {
   snippets: unknown;
 }
 
+export interface NodeSummary {
+  kind?: string;
+  prompt_version?: string;
+  model?: Record<string, string>;
+  target_id?: string;
+  text: string;
+  source_nodes?: string[];
+  source_files?: string[];
+  warnings?: unknown[];
+}
+
 export interface SummaryResponse {
   analysis_id: number;
   repo: string;
   revision: string;
-  summary: unknown;
+  summary: string | NodeSummary;
   cached: boolean;
+}
+
+/** node-summary 응답의 summary는 문자열이거나 { text, ... } 객체 — 본문 텍스트만 추출 */
+export function summaryText(summary: string | NodeSummary | unknown): string {
+  if (typeof summary === 'string') return summary;
+  if (summary && typeof summary === 'object' && typeof (summary as NodeSummary).text === 'string') {
+    return (summary as NodeSummary).text;
+  }
+  return '';
 }
 
 export interface QARequest {
