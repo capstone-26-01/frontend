@@ -134,26 +134,28 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
   return (
     <div className="flex flex-col h-full bg-[#05070a] select-text">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-white/5 shrink-0 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-white/8 shrink-0 flex items-center justify-between">
         <div>
-          <p className="text-[10px] font-mono text-gray-600 uppercase tracking-widest">Chat</p>
+          <p className="text-xs font-mono text-gray-400 uppercase tracking-widest">Chat</p>
           {lastContextNode && (
             <div className="mt-1 flex items-center gap-1.5">
-              <span className="text-[10px] font-mono" style={{ color: KIND_COLOR[lastContextNode.kind] }}>◉</span>
-              <span className="text-xs text-gray-400">{lastContextNode.label} in context</span>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: KIND_COLOR[lastContextNode.kind] ?? '#00e5ff' }} />
+              <span className="text-xs text-gray-400">
+                <span className="font-mono" style={{ color: KIND_COLOR[lastContextNode.kind] ?? '#00e5ff' }}>{lastContextNode.label}</span> in context
+              </span>
             </div>
           )}
         </div>
         <button
           onClick={onClear}
-          className="text-[10px] font-mono text-gray-700 hover:text-gray-400 transition-colors px-2 py-1 rounded hover:bg-white/5"
+          className="text-xs font-mono text-gray-500 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-white/5"
         >
           Clear
         </button>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+      <div className="flex-1 overflow-y-auto scrollbar-thin px-4 py-4 flex flex-col gap-3">
         {messages.map((msg, idx) => {
           const isLastAssistant =
             msg.role === 'assistant' &&
@@ -166,16 +168,16 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
             return (
               <div
                 key={msg.id}
-                className="rounded-xl border px-4 py-3 animate-in fade-in slide-in-from-bottom-2 duration-200"
-                style={{ borderColor: `${color}30`, background: `${color}08` }}
+                className="pl-3 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200"
+                style={{ borderLeft: `2px solid ${color}`, background: `${color}0a` }}
               >
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[9px] font-mono uppercase tracking-widest" style={{ color }}>{node.kind}</span>
-                  <span className="text-sm font-semibold" style={{ color }}>{node.label}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded" style={{ color, background: `${color}1a` }}>{node.kind}</span>
+                  <span className="text-sm font-semibold font-mono" style={{ color }}>{node.label}</span>
                 </div>
                 {node.properties && node.properties.length > 0 && (
-                  <div className="mb-2 text-[10px] font-mono text-gray-600">
-                    {node.properties.map(p => <div key={p}>+ {p}</div>)}
+                  <div className="mt-2 text-xs font-mono text-gray-400 space-y-0.5">
+                    {node.properties.map(p => <div key={p}><span className="text-gray-600">+</span> {p}</div>)}
                   </div>
                 )}
                 <div className="flex flex-wrap gap-1.5 mt-3">
@@ -183,7 +185,7 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
                     <button
                       key={q}
                       onClick={() => send(q)}
-                      className="text-[10px] text-gray-500 hover:text-white border border-white/8 hover:border-white/20 px-2.5 py-1 rounded-full transition-all"
+                      className="text-xs text-gray-400 hover:text-white border border-white/10 hover:border-white/25 px-2.5 py-1 rounded transition-all"
                     >
                       {q}
                     </button>
@@ -193,73 +195,73 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
             );
           }
 
-          if (msg.role === 'user') {
-            return (
-              <div key={msg.id} className="flex justify-end animate-in fade-in slide-in-from-bottom-2 duration-200">
-                <div className="max-w-[82%] bg-[#00e5ff]/10 border border-[#00e5ff]/20 rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm text-[#e8eaf0] leading-relaxed">
-                  {msg.content}
-                </div>
-              </div>
-            );
-          }
+          const isUser = msg.role === 'user';
+          const roleColor = isUser ? '#00e5ff' : '#7ee787';
+          const roleLabel = isUser ? 'USER' : 'ASSISTANT';
 
           return (
-            <div key={msg.id} className="flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <div className="flex justify-start group">
-                <div className="max-w-[90%] bg-white/[0.04] rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm text-gray-300 leading-relaxed relative">
-                  {doParse(msg.content).map((part, i) =>
-                    part.type === 'text' ? (
-                      <span key={i}>{part.content}</span>
-                    ) : (
-                      <button
-                        key={i}
-                        onClick={() => onFocusNode(part.id)}
-                        title={`Go to ${part.label}`}
-                        className="inline-flex items-center gap-0.5 mx-0.5 px-1.5 py-0.5 rounded font-mono text-xs font-semibold transition-all hover:scale-105 active:scale-95"
-                        style={{
-                          color: KIND_COLOR[part.kind] ?? '#00e5ff',
-                          background: `${KIND_COLOR[part.kind] ?? '#00e5ff'}15`,
-                          border: `1px solid ${KIND_COLOR[part.kind] ?? '#00e5ff'}30`,
-                        }}
-                      >
-                        {part.label}
-                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="opacity-60">
-                          <path d="M1 4h6M4 1l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </button>
-                    )
-                  )}
-                  {msg.isStreaming && (
-                    <span className="inline-block w-0.5 h-3.5 bg-[#00e5ff] ml-0.5 animate-pulse rounded-sm align-middle" />
-                  )}
-                  {!msg.isStreaming && msg.content && (
-                    <div className="absolute -top-2 -right-2">
-                      <CopyButton text={msg.content} />
+            <div key={msg.id} className="flex flex-col gap-2 group animate-in fade-in slide-in-from-bottom-2 duration-200">
+              {/* Role header */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.15em]" style={{ color: roleColor }}>
+                  {roleLabel}
+                </span>
+                <div className="flex-1 h-px bg-white/8" />
+                {!isUser && !msg.isStreaming && msg.content && <CopyButton text={msg.content} />}
+              </div>
+
+              {/* Content */}
+              <div
+                className="text-[13px] leading-relaxed pl-3 border-l"
+                style={{ borderColor: `${roleColor}22`, color: isUser ? '#e8eaf0' : '#c9d1d9' }}
+              >
+                {doParse(msg.content).map((part, i) =>
+                  part.type === 'text' ? (
+                    <span key={i} className="whitespace-pre-wrap">{part.content}</span>
+                  ) : (
+                    <button
+                      key={i}
+                      onClick={() => onFocusNode(part.id)}
+                      title={`Go to ${part.label}`}
+                      className="inline-flex items-center gap-0.5 mx-0.5 px-1.5 py-0.5 rounded font-mono text-xs font-semibold transition-all hover:scale-105 active:scale-95"
+                      style={{
+                        color: KIND_COLOR[part.kind] ?? '#00e5ff',
+                        background: `${KIND_COLOR[part.kind] ?? '#00e5ff'}15`,
+                        border: `1px solid ${KIND_COLOR[part.kind] ?? '#00e5ff'}30`,
+                      }}
+                    >
+                      {part.label}
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="opacity-60">
+                        <path d="M1 4h6M4 1l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  )
+                )}
+                {msg.isStreaming && (
+                  <span className="inline-block w-0.5 h-3.5 bg-[#7ee787] ml-0.5 animate-pulse rounded-sm align-middle" />
+                )}
+                {msg.citations && msg.citations.length > 0 && (
+                  <div className="mt-2 pt-2 border-t border-white/8">
+                    <div className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">References</div>
+                    <div className="flex flex-wrap gap-1">
+                      {msg.citations.map(c => (
+                        <span key={c} className="text-xs font-mono text-gray-400 bg-white/5 px-1.5 py-0.5 rounded">
+                          {c.split('/').pop()}
+                        </span>
+                      ))}
                     </div>
-                  )}
-                  {msg.citations && msg.citations.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-white/5">
-                      <div className="text-[9px] text-gray-600 uppercase tracking-widest mb-1">References</div>
-                      <div className="flex flex-wrap gap-1">
-                        {msg.citations.map(c => (
-                          <span key={c} className="text-[10px] font-mono text-gray-600 bg-white/5 px-1.5 py-0.5 rounded">
-                            {c.split('/').pop()}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
 
               {/* Follow-up suggestions */}
               {isLastAssistant && msg.followUps && msg.followUps.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pl-1">
+                <div className="flex flex-wrap gap-1.5 pl-3">
                   {msg.followUps.map(q => (
                     <button
                       key={q}
                       onClick={() => send(q)}
-                      className="text-[10px] text-[#00e5ff]/60 hover:text-[#00e5ff] border border-[#00e5ff]/15 hover:border-[#00e5ff]/40 px-2.5 py-1 rounded-full transition-all"
+                      className="text-xs text-[#00e5ff]/70 hover:text-[#00e5ff] border border-[#00e5ff]/20 hover:border-[#00e5ff]/40 px-2.5 py-1 rounded transition-all"
                     >
                       {q}
                     </button>
@@ -273,8 +275,9 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
       </div>
 
       {/* Input */}
-      <div className="px-4 py-4 border-t border-white/5 shrink-0">
-        <div className="flex items-end gap-2 p-1 rounded-xl bg-white/[0.03] border border-white/8 focus-within:border-[#00e5ff]/20 transition-colors">
+      <div className="px-4 py-4 border-t border-white/8 shrink-0">
+        <div className="flex items-end gap-2 p-1 rounded-md bg-white/[0.03] border border-white/10 focus-within:border-[#00e5ff]/30 transition-colors">
+          <span className="text-[#00e5ff]/60 font-mono text-sm pl-2 pb-2 select-none">›</span>
           <textarea
             ref={textareaRef}
             value={input}
@@ -283,7 +286,7 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
             placeholder={isStreaming ? 'Waiting for response…' : 'Ask about the codebase…'}
             disabled={isStreaming}
             rows={1}
-            className="flex-1 bg-transparent resize-none outline-none text-sm text-[#e8eaf0] placeholder:text-gray-700 px-3 py-2 max-h-36 leading-relaxed font-sans disabled:cursor-wait"
+            className="flex-1 bg-transparent resize-none outline-none text-sm text-[#e8eaf0] placeholder:text-gray-600 px-1 py-2 max-h-36 leading-relaxed font-sans disabled:cursor-wait"
           />
           <button
             onClick={() => send(input)}
@@ -295,7 +298,7 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
             </svg>
           </button>
         </div>
-        <p className="text-[10px] text-gray-700 mt-2 text-center">Enter to send · Shift+Enter for newline</p>
+        <p className="text-xs text-gray-500 mt-2 text-center">Enter to send · Shift+Enter for newline</p>
       </div>
     </div>
   );

@@ -4,8 +4,6 @@ import React, { useCallback, useState, useMemo, useRef, useEffect, forwardRef, u
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 import ReactFlow, {
   Background as _Background,
-  Controls as _Controls,
-  MiniMap as _MiniMap,
   addEdge,
   useNodesState,
   useEdgesState,
@@ -27,15 +25,13 @@ import 'reactflow/dist/style.css';
 import dagre from 'dagre';
 
 const Background = _Background as any;
-const Controls = _Controls as any;
-const MiniMap = _MiniMap as any;
 const BaseEdge = _BaseEdge as any;
 
 // ─────────────────────────────────────────────
 // Types & Theme
 // ─────────────────────────────────────────────
 
-export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin' | 'class' | 'function' | 'module' | 'method' | 'external';
+export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin' | 'class' | 'function' | 'module' | 'method' | 'external' | 'file' | 'directory';
 
 export interface NodeInfo {
   id: string;
@@ -58,18 +54,27 @@ interface GraphFlowProps {
 }
 type EdgeKind = string;
 type LayoutDir = 'TB' | 'LR' | 'radial';
-type ViewLevel = 'file' | 'class' | 'function';
+type ViewLevel = 'file' | 'class' | 'function' | 'folders' | 'all';
+
+// Code-symbol kinds — their presence means the repo was analyzed into modules/classes/functions.
+// When absent (only file/directory), we switch the view toggle to a file-tree mode (Folders / All).
+const CODE_KINDS = ['module', 'class', 'function', 'abstract', 'interface', 'concrete', 'mixin', 'method'];
 
 const LEVEL_NODE_KINDS: Record<ViewLevel, Set<string>> = {
-  file:     new Set(['module']),
-  class:    new Set(['module', 'class', 'abstract', 'interface', 'concrete', 'mixin']),
-  function: new Set(['module', 'class', 'abstract', 'interface', 'concrete', 'mixin', 'function']),
+  file:     new Set(['module', 'file', 'directory']),
+  class:    new Set(['module', 'file', 'directory', 'class', 'abstract', 'interface', 'concrete', 'mixin']),
+  function: new Set(['module', 'file', 'directory', 'class', 'abstract', 'interface', 'concrete', 'mixin', 'function']),
+  // File-tree mode
+  folders:  new Set(['directory']),
+  all:      new Set(['directory', 'file', 'module']),
 };
 
 const LEVEL_EDGE_KINDS: Record<ViewLevel, string[]> = {
   file:     ['contains'],
   class:    ['contains', 'inherits', 'imports'],
   function: ['contains', 'inherits', 'imports', 'calls', 'entrypoint'],
+  folders:  ['contains'],
+  all:      ['contains'],
 };
 
 interface ClassData {
@@ -93,6 +98,9 @@ const KIND_THEME: Record<NodeKind, {
   module:   { border: '#00e5ff', badge: '#00e5ff22', badgeText: '#00e5ff', glow: '0 0 24px rgba(0,229,255,0.35)', icon: '◈' },
   method:   { border: '#6366f1', badge: '#6366f122', badgeText: '#a5b4fc', glow: '0 0 16px rgba(99,102,241,0.25)', icon: 'm' },
   external: { border: '#4b5563', badge: '#4b556322', badgeText: '#9ca3af', glow: '0 0 8px rgba(75,85,99,0.2)',   icon: '↗' },
+  // 파일 트리 kind (분석 미지원 레포 등)
+  directory: { border: '#e3b341', badge: '#e3b34122', badgeText: '#f0c674', glow: '0 0 16px rgba(227,179,65,0.25)', icon: '▸' },
+  file:      { border: '#8b98a5', badge: '#8b98a51f', badgeText: '#c0c9d4', glow: '0 0 12px rgba(139,152,165,0.2)',  icon: '◦' },
 };
 
 // ─────────────────────────────────────────────
@@ -109,6 +117,39 @@ function ClassNode({ data, selected }: NodeProps<ClassNodeData>) {
   const theme = KIND_THEME[data.kind] ?? KIND_THEME.concrete;
   const opacity = data.dimmed ? 0.18 : 1;
   const scale = data.highlighted ? 1.04 : 1;
+
+  // Compact single-line node for file/directory tree
+  if (data.kind === 'file' || data.kind === 'directory') {
+    const active = selected || data.highlighted;
+    return (
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          background: selected ? '#0f1420' : '#0b0d14',
+          border: `1.5px solid ${active ? theme.border : theme.border + '44'}`,
+          borderRadius: 9, padding: '9px 13px',
+          width: COMPACT_W, height: COMPACT_H, boxSizing: 'border-box',
+          boxShadow: data.flashing
+            ? `0 0 0 4px ${theme.border}50, 0 0 32px ${theme.border}60`
+            : (active ? theme.glow : 'none'),
+          transition: 'all 0.18s ease',
+          opacity, transform: `scale(${scale})`,
+          fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        }}
+      >
+        <Handle type="target" position={Position.Top} style={{ background: theme.border, border: 'none', width: 7, height: 7 }} />
+        <span style={{ fontSize: 14, color: theme.border, lineHeight: 1, flexShrink: 0 }}>{theme.icon}</span>
+        <span style={{
+          fontSize: 12.5, fontWeight: data.kind === 'directory' ? 700 : 500,
+          color: data.kind === 'directory' ? '#f0f3f8' : '#c9d1d9',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {data.label}
+        </span>
+        <Handle type="source" position={Position.Bottom} style={{ background: theme.border, border: 'none', width: 7, height: 7 }} />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -391,17 +432,30 @@ function getConnectedPath(nodeId: string, edges: Edge[]): Set<string> {
 
 const NODE_W = 210;
 const NODE_H = 160;
+const COMPACT_W = 210;
+const COMPACT_H = 46;
+
+function isCompactKind(kind?: string): boolean {
+  return kind === 'file' || kind === 'directory';
+}
+
+function nodeSize(n: Node): { width: number; height: number } {
+  return isCompactKind((n.data as ClassData)?.kind)
+    ? { width: COMPACT_W, height: COMPACT_H }
+    : { width: NODE_W, height: NODE_H };
+}
 
 function applyDagreLayout(nodes: Node[], edges: Edge[], direction: 'TB' | 'LR'): Node[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction, nodesep: 60, ranksep: 80 });
-  nodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
+  g.setGraph({ rankdir: direction, nodesep: 28, ranksep: 56 });
+  nodes.forEach((n) => g.setNode(n.id, nodeSize(n)));
   edges.forEach((e) => g.setEdge(e.source, e.target));
   dagre.layout(g);
   return nodes.map((n) => {
     const { x, y } = g.node(n.id);
-    return { ...n, position: { x: x - NODE_W / 2, y: y - NODE_H / 2 } };
+    const s = nodeSize(n);
+    return { ...n, position: { x: x - s.width / 2, y: y - s.height / 2 } };
   });
 }
 
@@ -470,6 +524,8 @@ function Legend({
   presentEdgeKinds: Set<string>;
 }) {
   const ALL_NODE_ITEMS: { kind: NodeKind; label: string }[] = [
+    { kind: 'directory', label: 'Directory' },
+    { kind: 'file',      label: 'File' },
     { kind: 'class',    label: 'Class' },
     { kind: 'module',   label: 'Module' },
     { kind: 'function', label: 'Function' },
@@ -547,7 +603,7 @@ function DetailPanel({ node }: { node: Node<ClassData> | null }) {
   const t = KIND_THEME[kind];
   return (
     <div style={{
-      position: 'absolute', top: 16, right: 16, zIndex: 10,
+      position: 'absolute', top: 72, right: 16, zIndex: 10,
       background: '#0b0d14ee', border: `1px solid ${t.border}33`,
       borderRadius: 14, padding: '14px 18px', minWidth: 200, maxWidth: 240,
       backdropFilter: 'blur(12px)',
@@ -569,14 +625,16 @@ function DetailPanel({ node }: { node: Node<ClassData> | null }) {
           ))}
         </div>
       )}
-      <div>
-        <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>METHODS</div>
-        {methods.map(m => (
-          <div key={m} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.8 }}>
-            <span style={{ color: t.badgeText, opacity: 0.7 }}>ƒ</span> {m}
-          </div>
-        ))}
-      </div>
+      {methods && methods.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: '#6b7280', marginBottom: 4, letterSpacing: '0.1em' }}>METHODS</div>
+          {methods.map(m => (
+            <div key={m} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.8 }}>
+              <span style={{ color: t.badgeText, opacity: 0.7 }}>ƒ</span> {m}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -593,6 +651,7 @@ function Toolbar({
   matchCount,
   viewLevel,
   onViewLevel,
+  treeMode,
 }: {
   query: string;
   onQuery: (q: string) => void;
@@ -601,12 +660,18 @@ function Toolbar({
   matchCount: number;
   viewLevel: ViewLevel;
   onViewLevel: (l: ViewLevel) => void;
+  treeMode: boolean;
 }) {
-  const views: { id: ViewLevel; label: string; icon: string }[] = [
-    { id: 'file',     label: 'File',  icon: '◈' },
-    { id: 'class',    label: 'Class', icon: '⬢' },
-    { id: 'function', label: 'Func',  icon: 'ƒ' },
-  ];
+  const views: { id: ViewLevel; label: string; icon: string }[] = treeMode
+    ? [
+        { id: 'folders', label: 'Folders', icon: '▸' },
+        { id: 'all',     label: 'All',     icon: '◦' },
+      ]
+    : [
+        { id: 'file',     label: 'File',  icon: '◈' },
+        { id: 'class',    label: 'Class', icon: '⬢' },
+        { id: 'function', label: 'Func',  icon: 'ƒ' },
+      ];
 
   const layouts: { id: LayoutDir; label: string; icon: string }[] = [
     { id: 'TB',     label: 'Top–Down', icon: '⬇' },
@@ -700,6 +765,52 @@ function Toolbar({
 }
 
 // ─────────────────────────────────────────────
+// Custom zoom/fit controls (matches toolbar styling)
+// ─────────────────────────────────────────────
+
+function GraphControls() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+
+  const btn: React.CSSProperties = {
+    width: 30, height: 30,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: 'transparent', border: 'none', borderRadius: 8,
+    color: '#9aa6b2', cursor: 'pointer', transition: 'background 0.15s, color 0.15s',
+  };
+  const enter = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = '#00e5ff14';
+    e.currentTarget.style.color = '#00e5ff';
+  };
+  const leave = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.background = 'transparent';
+    e.currentTarget.style.color = '#9aa6b2';
+  };
+  const divider = <div style={{ height: 1, background: '#ffffff0d', margin: '1px 5px' }} />;
+
+  return (
+    <div style={{
+      position: 'absolute', top: 16, left: 16, zIndex: 10,
+      background: '#0b0d14ee', border: '1px solid #ffffff10',
+      borderRadius: 12, padding: 4,
+      display: 'flex', flexDirection: 'column', gap: 2,
+      backdropFilter: 'blur(8px)', userSelect: 'none',
+    }}>
+      <button title="Zoom in" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={() => zoomIn({ duration: 200 })}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+      </button>
+      {divider}
+      <button title="Zoom out" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={() => zoomOut({ duration: 200 })}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+      </button>
+      {divider}
+      <button title="Fit view" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={() => fitView({ padding: 0.15, duration: 400 })}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5.5V3a1 1 0 0 1 1-1h2.5M10.5 2H13a1 1 0 0 1 1 1v2.5M14 10.5V13a1 1 0 0 1-1 1h-2.5M5.5 14H3a1 1 0 0 1-1-1v-2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
@@ -749,6 +860,11 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   const presentEdgeKinds = useMemo(
     () => new Set(edges.map(e => e.data?.kind as string).filter(Boolean)),
     [edges]
+  );
+  // No code symbols (only file/directory) → file-tree view mode
+  const treeMode = useMemo(
+    () => !CODE_KINDS.some(k => presentNodeKinds.has(k)),
+    [presentNodeKinds]
   );
 
   // activeEdgeKinds가 비어있으면(초기값) 전체 허용
@@ -832,7 +948,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       const flashing = n.id === flashId;
       return { ...n, hidden: hiddenByLevel, data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing } };
     });
-  }, [nodes, hoveredId, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel]);
+  }, [nodes, hoveredId, issueHighlightIds, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel]);
 
   // Edge dim on hover / path + bundling + level filter + base opacity
   const displayEdges = useMemo(() => {
@@ -862,7 +978,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         style: { ...e.style, opacity },
       };
     });
-  }, [visibleEdges, hoveredId, pathIds, hiddenNodeIdsByLevel]);
+  }, [visibleEdges, hoveredId, issueHighlightIds, pathIds, hiddenNodeIdsByLevel]);
 
   // ─────────────────────────────────────────
   // ③ Search: highlight + camera jump
@@ -900,6 +1016,21 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     const id = setTimeout(() => fitView({ padding: 0.15, duration: 450 }), 60);
     return () => clearTimeout(id);
   }, [viewLevel, fitView]);
+
+  // ─────────────────────────────────────────
+  // Focus camera on issue-related nodes when an issue is selected
+  // ─────────────────────────────────────────
+  useEffect(() => {
+    if (!issueHighlightIds || issueHighlightIds.size === 0) return;
+    const targets = Array.from(issueHighlightIds)
+      .filter(id => !hiddenNodeIdsByLevel.has(id))
+      .map(id => ({ id }));
+    if (targets.length === 0) return;
+    const t = setTimeout(() => {
+      fitView({ nodes: targets, padding: 0.45, duration: 600, maxZoom: 1.3 });
+    }, 90);
+    return () => clearTimeout(t);
+  }, [issueHighlightIds, hiddenNodeIdsByLevel, fitView]);
 
 
   // ─────────────────────────────────────────
@@ -951,8 +1082,9 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         ...getEdgeStyle(e.kind),
       }));
 
-    // FILE VIEW 기본: contains 엣지만 활성, module 노드만 표시
-    setViewLevel('file');
+    // 기본 뷰: 코드 심볼 있으면 File, 파일 트리만 있으면 Folders(디렉토리만)
+    const hasCode = apiNodes.some(n => CODE_KINDS.includes(n.kind));
+    setViewLevel(hasCode ? 'file' : 'folders');
     setActiveEdgeKinds(new Set(['contains']));
 
     const laid = applyDagreLayout(rfNodes, rfEdges, 'TB');
@@ -997,6 +1129,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         matchCount={searchMatches.length}
         viewLevel={viewLevel}
         onViewLevel={handleViewLevel}
+        treeMode={treeMode}
       />
 
       <ReactFlow
@@ -1016,13 +1149,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={28} size={0.8} color="#00e5ff18" style={{ backgroundColor: '#05070a' }} />
-        <Controls style={{ background: '#0b0d14', border: '1px solid #ffffff10', borderRadius: 10 }} />
-        <MiniMap
-          style={{ background: '#0b0d14', border: '1px solid #ffffff10', borderRadius: 10 }}
-          nodeColor={((n: any) => (KIND_THEME[n.data?.kind as NodeKind] ?? KIND_THEME.concrete).border + '99') as any}
-          maskColor="#05070acc"
-        />
       </ReactFlow>
+
+      {/* ① Custom zoom/fit controls */}
+      <GraphControls />
 
       {/* ② Legend with edge filter */}
       <Legend
