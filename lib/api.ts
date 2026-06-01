@@ -1,4 +1,7 @@
-export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin';
+export type NodeKind =
+  | 'abstract' | 'concrete' | 'interface' | 'mixin'
+  | 'class' | 'function' | 'module' | 'method' | 'external'
+  | 'file' | 'directory';
 
 export interface AnalysisResponse {
   analysis_id: number | null;

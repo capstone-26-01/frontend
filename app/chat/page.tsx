@@ -25,6 +25,60 @@ const INITIAL_MESSAGES: Message[] = [{
 
 const ISSUE_PANEL_WIDTH = 260;
 
+const EXT_TECH: Record<string, string> = {
+  ts: 'TypeScript', tsx: 'TypeScript', mts: 'TypeScript', cts: 'TypeScript',
+  js: 'JavaScript', jsx: 'JavaScript', mjs: 'JavaScript', cjs: 'JavaScript',
+  rs: 'Rust', py: 'Python', go: 'Go', java: 'Java', kt: 'Kotlin', rb: 'Ruby',
+  php: 'PHP', cs: 'C#', cpp: 'C++', cc: 'C++', c: 'C', swift: 'Swift', scala: 'Scala',
+  css: 'CSS', scss: 'SCSS', sass: 'SCSS', html: 'HTML', vue: 'Vue', svelte: 'Svelte',
+};
+const CONFIG_TECH: Array<[string, string]> = [
+  ['package.json', 'Node.js'], ['cargo.toml', 'Cargo'], ['go.mod', 'Go modules'],
+  ['requirements.txt', 'pip'], ['pyproject.toml', 'Python'], ['pom.xml', 'Maven'],
+  ['build.gradle', 'Gradle'], ['gemfile', 'Bundler'], ['dockerfile', 'Docker'],
+  ['vite.config', 'Vite'], ['next.config', 'Next.js'], ['webpack.config', 'webpack'],
+  ['tailwind.config', 'Tailwind'],
+];
+
+/** Build a newcomer-friendly repo overview (markdown) from graph nodes. */
+function buildOverview(repoName: string, nodes: RepoGraphNode[]): string {
+  const extCount: Record<string, number> = {};
+  const dirFiles: Record<string, number> = {};
+  const labels = new Set<string>();
+  let files = 0, dirs = 0;
+
+  for (const n of nodes) {
+    if (n.kind === 'directory') { dirs++; continue; }
+    if (n.kind !== 'file') continue;
+    files++;
+    const label = n.label.toLowerCase();
+    labels.add(label);
+    const ext = label.includes('.') ? label.split('.').pop()! : '';
+    if (EXT_TECH[ext]) extCount[EXT_TECH[ext]] = (extCount[EXT_TECH[ext]] ?? 0) + 1;
+    const seg = n.id.split('/');
+    const top = seg.length > 1 ? seg[0] : '(root)';
+    dirFiles[top] = (dirFiles[top] ?? 0) + 1;
+  }
+
+  const langs = Object.entries(extCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([t]) => t);
+  const tooling = CONFIG_TECH
+    .filter(([f]) => [...labels].some(l => l === f || l.startsWith(f.replace('.config', '.config'))))
+    .map(([, t]) => t);
+  const tech = Array.from(new Set([...langs, ...tooling]));
+  const topDirs = Object.entries(dirFiles).filter(([d]) => d !== '(root)').sort((a, b) => b[1] - a[1]).slice(0, 6);
+
+  let md = `## 📦 ${repoName} — Overview\n\n`;
+  if (tech.length) md += `**Tech stack:** ${tech.join(' · ')}\n\n`;
+  md += `**Size:** ${files} files · ${dirs} folders\n\n`;
+  if (topDirs.length) {
+    md += `**Where the code lives:**\n`;
+    for (const [d, c] of topDirs) md += `* \`${d}\` — ${c} files\n`;
+    md += `\n`;
+  }
+  md += `Pick an issue on the left to see exactly which files you'd touch, or ask me anything about this codebase.`;
+  return md;
+}
+
 function ChatContent() {
   const searchParams = useSearchParams();
   const analysisId = searchParams.get('analysis_id') ? Number(searchParams.get('analysis_id')) : null;
@@ -91,16 +145,31 @@ function ChatContent() {
       setIssueHighlightIds(new Set(data.selected_node_ids));
 
       const candidates = data.candidates;
-      if (candidates.length === 0) return;
+      if (candidates.length === 0) {
+        setMessages(prev => [...prev, {
+          id: `issue-none-${Date.now()}`,
+          role: 'assistant',
+          content: `## 🚀 Issue #${issue.number} — Start guide\n\n**${issue.title}**\n\nI couldn't pin this issue to specific files automatically. Try asking me where a feature mentioned in the issue lives.`,
+        }]);
+        return;
+      }
 
-      // 이슈 관련 노드 목록 intro 메시지
-      const nodeList = candidates
-        .map((c, i) => `${i + 1}. \`${c.node.label}\` — ${c.node.path}`)
+      // 시작 가이드: 진입 파일 + 관련 파일
+      const [entry, ...rest] = candidates;
+      const relatedList = rest.slice(0, 5)
+        .map(c => `* \`${c.node.path}\``)
         .join('\n');
+
+      let guide = `## 🚀 Issue #${issue.number} — Start guide\n\n`;
+      guide += `**${issue.title}**\n\n`;
+      guide += `**Start here** (most relevant):\n* \`${entry.node.path}\`${entry.reason ? ` — ${entry.reason}` : ''}\n\n`;
+      if (relatedList) guide += `**Also likely involved:**\n${relatedList}\n\n`;
+      guide += `Below are summaries of the key files. Ask me "how would I fix this?" for a suggested approach.`;
+
       setMessages(prev => [...prev, {
-        id: `issue-intro-${Date.now()}`,
+        id: `issue-guide-${Date.now()}`,
         role: 'assistant',
-        content: `Issue #${issue.number} **${issue.title}** 관련 코드 노드 ${candidates.length}개:\n\n${nodeList}`,
+        content: guide,
       }]);
 
       // 상위 3개 candidates에 대해 node-context + summary
@@ -122,6 +191,7 @@ function ChatContent() {
   const dragStartX = useRef(0);
   const hasDragged = useRef(false);
   const graphRef = useRef<GraphFlowHandle>(null);
+  const overviewKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (!repoUrl) return;
@@ -130,10 +200,20 @@ function ChatContent() {
       .then(data => {
         setApiNodes(data.nodes);
         setApiEdges(data.edges);
+        // Auto-post a newcomer overview once per repo
+        if (overviewKey.current !== repoUrl && data.nodes.length > 0) {
+          overviewKey.current = repoUrl;
+          const name = data.repo || repoName || repoUrl.replace('https://github.com/', '');
+          setMessages(prev => [...prev, {
+            id: `overview-${Date.now()}`,
+            role: 'assistant',
+            content: buildOverview(name, data.nodes),
+          }]);
+        }
       })
       .catch(() => {})
       .finally(() => setGraphLoading(false));
-  }, [repoUrl, revision]);
+  }, [repoUrl, revision, repoName]);
 
   const nodeMapForChat = useMemo<NodeMapEntry[]>(
     () => (apiNodes ?? []).map(n => ({ label: n.label, id: n.id, kind: n.kind })),
