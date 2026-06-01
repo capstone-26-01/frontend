@@ -135,10 +135,13 @@ function ChatContent() {
     setSelectedIssue(issue);
     if (!issue || analysisId == null) {
       setIssueHighlightIds(null);
+      setIssueCollapsed(false); // reopen issue list when deselected
       return;
     }
 
-    if (chatCollapsed) setChatCollapsed(false);
+    // Selecting an issue: close the issue list, open the chat
+    setIssueCollapsed(true);
+    setChatCollapsed(false);
 
     try {
       const data = await fetchIssueRelatedNodes({ analysis_id: analysisId, issue_number: issue.number });
