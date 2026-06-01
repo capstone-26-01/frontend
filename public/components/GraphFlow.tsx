@@ -700,6 +700,7 @@ function Toolbar({
   viewLevel,
   onViewLevel,
   treeMode,
+  searchRef,
 }: {
   query: string;
   onQuery: (q: string) => void;
@@ -709,6 +710,7 @@ function Toolbar({
   viewLevel: ViewLevel;
   onViewLevel: (l: ViewLevel) => void;
   treeMode: boolean;
+  searchRef: React.RefObject<HTMLInputElement | null>;
 }) {
   const views: { id: ViewLevel; label: string; icon: string }[] = treeMode
     ? [
@@ -740,9 +742,10 @@ function Toolbar({
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
         <span style={{ position: 'absolute', left: 8, fontSize: 11, color: '#6b7280' }}>⌕</span>
         <input
+          ref={searchRef}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
-          placeholder="Search node…"
+          placeholder="Search node…  ( / )"
           style={{
             background: '#0f1420', border: '1px solid #ffffff15',
             borderRadius: 8, padding: '5px 10px 5px 24px',
@@ -816,7 +819,7 @@ function Toolbar({
 // Custom zoom/fit controls (matches toolbar styling)
 // ─────────────────────────────────────────────
 
-function GraphControls() {
+function GraphControls({ onExpandAll, onCollapseAll, treeable }: { onExpandAll: () => void; onCollapseAll: () => void; treeable: boolean }) {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
 
   const btn: React.CSSProperties = {
@@ -854,6 +857,16 @@ function GraphControls() {
       <button title="Fit view" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={() => fitView({ padding: 0.15, duration: 400 })}>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 5.5V3a1 1 0 0 1 1-1h2.5M10.5 2H13a1 1 0 0 1 1 1v2.5M14 10.5V13a1 1 0 0 1-1 1h-2.5M5.5 14H3a1 1 0 0 1-1-1v-2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </button>
+      {treeable && <>
+        {divider}
+        <button title="Expand all" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={onExpandAll}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12M5 5l3-3 3 3M5 11l3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </button>
+        {divider}
+        <button title="Collapse all" style={btn} onMouseEnter={enter} onMouseLeave={leave} onClick={onCollapseAll}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8h12M5 4l3 3 3-3M5 12l3-3 3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </button>
+      </>}
     </div>
   );
 }
@@ -875,6 +888,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   const [flashId,      setFlashId]      = useState<string | null>(null);
   // Collapsible tree: set of expanded parent ids (children visible only when all ancestors expanded)
   const [expandedIds,  setExpandedIds]  = useState<Set<string>>(new Set());
+  // Hover tooltip
+  const [hoverTip, setHoverTip] = useState<{ x: number; y: number; label: string; kind: string; path: string } | null>(null);
+
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
     focusNode: (id: string) => {
@@ -1018,12 +1035,65 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   // ① Hover focus
   // ─────────────────────────────────────────
-  const handleNodeMouseEnter = useCallback((_: any, node: Node) => {
+  const handleNodeMouseEnter = useCallback((e: React.MouseEvent, node: Node) => {
     setHoveredId(node.id);
+    const d = node.data as ClassData;
+    setHoverTip({ x: e.clientX, y: e.clientY, label: d.label, kind: d.kind, path: node.id });
+  }, []);
+
+  const handleNodeMouseMove = useCallback((e: React.MouseEvent) => {
+    setHoverTip(prev => (prev ? { ...prev, x: e.clientX, y: e.clientY } : prev));
   }, []);
 
   const handleNodeMouseLeave = useCallback(() => {
     setHoveredId(null);
+    setHoverTip(null);
+  }, []);
+
+  // Double-click a directory → expand its whole subtree
+  const handleNodeDoubleClick = useCallback((_: any, node: Node) => {
+    if (!hierarchy.hasChildren.has(node.id)) return;
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      const stack = [node.id];
+      while (stack.length) {
+        const id = stack.pop()!;
+        if (hierarchy.hasChildren.has(id)) next.add(id);
+        for (const c of (hierarchy.childrenMap.get(id) ?? [])) stack.push(c);
+      }
+      return next;
+    });
+  }, [hierarchy]);
+
+  const expandAll = useCallback(() => {
+    setExpandedIds(new Set(hierarchy.hasChildren));
+  }, [hierarchy]);
+
+  const collapseAll = useCallback(() => {
+    setExpandedIds(new Set());
+  }, []);
+
+  // Keyboard shortcuts: "/" focus search, Esc deselect / clear search
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (e.key === '/' && !typing) {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === 'Escape') {
+        if (t === searchRef.current) {
+          setQuery('');
+          searchRef.current?.blur();
+        } else if (!typing) {
+          setSelectedNode(null);
+          setPathIds(null);
+          setHoverTip(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   // ─────────────────────────────────────────
@@ -1278,6 +1348,7 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         viewLevel={viewLevel}
         onViewLevel={handleViewLevel}
         treeMode={treeMode}
+        searchRef={searchRef}
       />
 
       <ReactFlow
@@ -1289,8 +1360,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onPaneClick={handlePaneClick}
         onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseMove={handleNodeMouseMove}
         onNodeMouseLeave={handleNodeMouseLeave}
         fitView
         fitViewOptions={{ padding: 0.15 }}
@@ -1299,8 +1372,33 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         <Background gap={28} size={0.8} color="#00e5ff18" style={{ backgroundColor: '#05070a' }} />
       </ReactFlow>
 
+      {/* Hover tooltip */}
+      {hoverTip && (
+        <div style={{
+          position: 'fixed', left: hoverTip.x + 14, top: hoverTip.y + 14, zIndex: 50,
+          pointerEvents: 'none', maxWidth: 320,
+          background: '#0b0d14f2', border: `1px solid ${(KIND_THEME[hoverTip.kind as NodeKind] ?? KIND_THEME.concrete).border}55`,
+          borderRadius: 8, padding: '7px 10px',
+          fontFamily: '"JetBrains Mono", monospace',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+            <span style={{ fontSize: 8, letterSpacing: '0.1em', textTransform: 'uppercase', color: (KIND_THEME[hoverTip.kind as NodeKind] ?? KIND_THEME.concrete).badgeText }}>
+              {(KIND_THEME[hoverTip.kind as NodeKind] ?? KIND_THEME.concrete).icon} {hoverTip.kind}
+            </span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#e8eaf0' }}>{hoverTip.label}</span>
+          </div>
+          <div style={{ fontSize: 9.5, color: '#7a8896', wordBreak: 'break-all' }}>{hoverTip.path}</div>
+          {hierarchy.hasChildren.has(hoverTip.path) && (
+            <div style={{ fontSize: 9, color: '#6b7787', marginTop: 3 }}>
+              {(hierarchy.childrenMap.get(hoverTip.path) ?? []).length} children · click to {expandedIds.has(hoverTip.path) ? 'collapse' : 'expand'}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ① Custom zoom/fit controls */}
-      <GraphControls />
+      <GraphControls onExpandAll={expandAll} onCollapseAll={collapseAll} treeable={hierarchy.hasChildren.size > 0} />
 
       {/* ② Legend with edge filter */}
       <Legend
