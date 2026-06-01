@@ -1,4 +1,7 @@
-export type NodeKind = 'abstract' | 'concrete' | 'interface' | 'mixin';
+export type NodeKind =
+  | 'abstract' | 'concrete' | 'interface' | 'mixin'
+  | 'class' | 'function' | 'module' | 'method' | 'external'
+  | 'file' | 'directory';
 
 export interface AnalysisResponse {
   analysis_id: number | null;
@@ -92,12 +95,32 @@ export interface ShareResponse {
   snippets: unknown;
 }
 
+export interface NodeSummary {
+  kind?: string;
+  prompt_version?: string;
+  model?: Record<string, string>;
+  target_id?: string;
+  text: string;
+  source_nodes?: string[];
+  source_files?: string[];
+  warnings?: unknown[];
+}
+
 export interface SummaryResponse {
   analysis_id: number;
   repo: string;
   revision: string;
-  summary: unknown;
+  summary: string | NodeSummary;
   cached: boolean;
+}
+
+/** node-summary 응답의 summary는 문자열이거나 { text, ... } 객체 — 본문 텍스트만 추출 */
+export function summaryText(summary: string | NodeSummary | unknown): string {
+  if (typeof summary === 'string') return summary;
+  if (summary && typeof summary === 'object' && typeof (summary as NodeSummary).text === 'string') {
+    return (summary as NodeSummary).text;
+  }
+  return '';
 }
 
 export interface QARequest {
@@ -220,4 +243,107 @@ export async function createShare(req: ShareCreateRequest): Promise<ShareRespons
 
 export async function fetchShare(shareId: string): Promise<ShareResponse> {
   return apiFetch<ShareResponse>(`/api/share/${shareId}/`);
+}
+
+export interface IssueAuthor {
+  login: string;
+  avatar_url: string;
+  html_url: string;
+}
+
+export interface IssueLabel {
+  name: string;
+  color: string;
+  description: string;
+}
+
+export interface GithubIssue {
+  key: string;
+  number: number;
+  title: string;
+  state: string;
+  html_url: string;
+  author: IssueAuthor | null;
+  labels: IssueLabel[];
+  assignees: IssueAuthor[];
+  comments_count: number;
+  created_at: string;
+  updated_at: string;
+  body_excerpt: string;
+  body_truncated: boolean;
+  locked: boolean;
+  is_pull_request: boolean;
+}
+
+export interface IssueListResponse {
+  repo: string;
+  provider: string;
+  source: string;
+  mock: boolean;
+  state: string;
+  page: number;
+  per_page: number;
+  has_next_page: boolean;
+  next_page: number | null;
+  issues: GithubIssue[];
+}
+
+export interface IssueRelatedNodesRequest {
+  analysis_id: number;
+  issue_number: number;
+  max_nodes?: number;
+}
+
+export interface IssueNodeInfo {
+  id: string;
+  kind: string;
+  label: string;
+  path: string;
+  start_line: number;
+  end_line: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface IssueRelatedNodeCandidate {
+  rank: number;
+  score: number;
+  node_id: string;
+  node: IssueNodeInfo;
+  reason: string;
+  evidence: unknown[];
+}
+
+export interface IssueRelatedNodesResponse {
+  analysis_id: number;
+  repo: string;
+  revision: string;
+  provider: string;
+  source: string;
+  mock: boolean;
+  issue: Partial<GithubIssue>;
+  selected_node_ids: string[];
+  candidates: IssueRelatedNodeCandidate[];
+  limits: { max_nodes: number };
+  warnings: unknown[];
+}
+
+export async function fetchIssues(
+  repoUrl: string,
+  page?: number,
+  perPage?: number,
+): Promise<IssueListResponse> {
+  const params = new URLSearchParams({ url: toGithubUrl(repoUrl) });
+  if (page) params.set('page', String(page));
+  if (perPage) params.set('per_page', String(perPage));
+  return apiFetch<IssueListResponse>(`/api/issues/?${params}`);
+}
+
+export async function fetchIssueRelatedNodes(
+  req: IssueRelatedNodesRequest,
+): Promise<IssueRelatedNodesResponse> {
+  return apiFetch<IssueRelatedNodesResponse>('/api/issues/related-nodes/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
 }
