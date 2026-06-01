@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo, KeyboardEvent, ChangeEvent } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent, ChangeEvent } from 'react';
+import { FiUser, FiStar } from 'react-icons/fi';
 import type { NodeInfo } from '@/public/components/GraphFlow';
 
 export interface Message {
@@ -24,26 +25,89 @@ const KIND_COLOR: Record<string, string> = {
 
 const DEFAULT_NODE_MAP: NodeMapEntry[] = [];
 
-type TextPart = { type: 'text'; content: string } | { type: 'node'; label: string; id: string; kind: string };
+type NodePart = { label: string; id: string; kind: string };
 
-function parseContent(text: string, nodeMap: NodeMapEntry[], pattern: RegExp): TextPart[] {
-  if (!nodeMap.length) return [{ type: 'text', content: text }];
-  const parts: TextPart[] = [];
-  let last = 0;
-  const re = new RegExp(pattern.source, pattern.flags);
-  re.lastIndex = 0;
-  let match: RegExpExecArray | null;
+function findNode(token: string, nodeMap: NodeMapEntry[]): NodePart | null {
+  const n = nodeMap.find(m => m.label === token || m.id === token || m.id.split('/').pop() === token);
+  return n ? { label: n.label, id: n.id, kind: n.kind } : null;
+}
 
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) parts.push({ type: 'text', content: text.slice(last, match.index) });
-    const label = match[1] ?? match[2];
-    const node = nodeMap.find(n => n.label === label);
-    if (node) parts.push({ type: 'node', label, id: node.id, kind: node.kind });
-    else parts.push({ type: 'text', content: match[0] });
-    last = match.index + match[0].length;
+function NodeChip({ part, onFocusNode }: { part: NodePart; onFocusNode: (id: string) => void }) {
+  const color = KIND_COLOR[part.kind] ?? '#00e5ff';
+  return (
+    <button
+      onClick={() => onFocusNode(part.id)}
+      title={`Go to ${part.label}`}
+      className="inline-flex items-center gap-0.5 mx-0.5 px-1.5 py-0.5 rounded font-mono text-xs font-semibold align-baseline transition-all hover:scale-105 active:scale-95"
+      style={{ color, background: `${color}15`, border: `1px solid ${color}30` }}
+    >
+      {part.label}
+      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="opacity-60">
+        <path d="M1 4h6M4 1l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
+}
+
+// Inline markdown: **bold**, `code` (clickable when it matches a graph node)
+function renderInline(text: string, nodeMap: NodeMapEntry[], onFocusNode: (id: string) => void, kp: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  const re = /\*\*([^*]+)\*\*|`([^`]+)`/g;
+  let last = 0, i = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) {
+      out.push(
+        <strong key={`${kp}-b${i}`} style={{ color: '#e8eaf0', fontWeight: 700 }}>
+          {renderInline(m[1], nodeMap, onFocusNode, `${kp}-b${i}`)}
+        </strong>
+      );
+    } else {
+      const code = m[2];
+      const node = findNode(code, nodeMap);
+      out.push(
+        node
+          ? <NodeChip key={`${kp}-n${i}`} part={node} onFocusNode={onFocusNode} />
+          : <code key={`${kp}-c${i}`} className="font-mono text-xs px-1 py-0.5 rounded bg-white/10 text-[#c9d1d9]">{code}</code>
+      );
+    }
+    last = m.index + m[0].length;
+    i++;
   }
-  if (last < text.length) parts.push({ type: 'text', content: text.slice(last) });
-  return parts;
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+// Block-level markdown: headings, bullet lists, paragraphs
+function MarkdownContent({ content, nodeMap, onFocusNode }: { content: string; nodeMap: NodeMapEntry[]; onFocusNode: (id: string) => void }) {
+  const lines = content.split('\n');
+  const blocks: React.ReactNode[] = [];
+  let list: React.ReactNode[] = [];
+  const flush = () => {
+    if (list.length) {
+      blocks.push(<ul key={`ul${blocks.length}`} className="list-disc pl-5 my-1.5 space-y-1">{list}</ul>);
+      list = [];
+    }
+  };
+  lines.forEach((line, idx) => {
+    const bullet = line.match(/^\s*[-*]\s+(.*)/);
+    const heading = line.match(/^\s*(#{1,6})\s+(.*)/);
+    if (bullet) {
+      list.push(<li key={`li${idx}`}>{renderInline(bullet[1], nodeMap, onFocusNode, `li${idx}`)}</li>);
+      return;
+    }
+    flush();
+    if (heading) {
+      blocks.push(<div key={`h${idx}`} className="font-semibold text-[#e8eaf0] mt-3 mb-1">{renderInline(heading[2], nodeMap, onFocusNode, `h${idx}`)}</div>);
+    } else if (line.trim() === '') {
+      if (blocks.length) blocks.push(<div key={`sp${idx}`} className="h-2" />);
+    } else {
+      blocks.push(<p key={`p${idx}`} className="my-1">{renderInline(line, nodeMap, onFocusNode, `p${idx}`)}</p>);
+    }
+  });
+  flush();
+  return <>{blocks}</>;
 }
 
 const QUICK_QUESTIONS = [
@@ -90,19 +154,6 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const effectiveNodeMap = nodeMap?.length ? nodeMap : DEFAULT_NODE_MAP;
-  const nodePattern = useMemo(() => {
-    if (!effectiveNodeMap.length) return /(?!)/g;
-    const labels = effectiveNodeMap.map(n => n.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    return new RegExp(
-      `\`(${labels.join('|')})\`|(${labels.join('|')})(?=[\\s.,;:!?)\\]|]|$)`,
-      'g'
-    );
-  }, [effectiveNodeMap]);
-
-  const doParse = useCallback(
-    (text: string) => parseContent(text, effectiveNodeMap, nodePattern),
-    [effectiveNodeMap, nodePattern]
-  );
 
   const lastContextNode = [...messages].reverse().find(m => m.role === 'node-context')?.node ?? null;
   const isStreaming = messages.some(m => m.isStreaming);
@@ -196,14 +247,16 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
           }
 
           const isUser = msg.role === 'user';
-          const roleColor = isUser ? '#00e5ff' : '#7ee787';
-          const roleLabel = isUser ? 'USER' : 'ASSISTANT';
+          const roleColor = isUser ? '#00e5ff' : '#818cf8';
+          const roleLabel = isUser ? 'USER' : 'GITSTARTER';
+          const RoleIcon = isUser ? FiUser : FiStar;
 
           return (
             <div key={msg.id} className="flex flex-col gap-2 group animate-in fade-in slide-in-from-bottom-2 duration-200">
               {/* Role header */}
               <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.15em]" style={{ color: roleColor }}>
+                <span className="flex items-center gap-1.5 text-[10px] font-mono font-semibold uppercase tracking-[0.15em]" style={{ color: roleColor }}>
+                  <RoleIcon size={12} />
                   {roleLabel}
                 </span>
                 <div className="flex-1 h-px bg-white/8" />
@@ -215,30 +268,12 @@ export default function ChatPanel({ messages, onSend, onClear, onFocusNode, node
                 className="text-[13px] leading-relaxed pl-3 border-l"
                 style={{ borderColor: `${roleColor}22`, color: isUser ? '#e8eaf0' : '#c9d1d9' }}
               >
-                {doParse(msg.content).map((part, i) =>
-                  part.type === 'text' ? (
-                    <span key={i} className="whitespace-pre-wrap">{part.content}</span>
-                  ) : (
-                    <button
-                      key={i}
-                      onClick={() => onFocusNode(part.id)}
-                      title={`Go to ${part.label}`}
-                      className="inline-flex items-center gap-0.5 mx-0.5 px-1.5 py-0.5 rounded font-mono text-xs font-semibold transition-all hover:scale-105 active:scale-95"
-                      style={{
-                        color: KIND_COLOR[part.kind] ?? '#00e5ff',
-                        background: `${KIND_COLOR[part.kind] ?? '#00e5ff'}15`,
-                        border: `1px solid ${KIND_COLOR[part.kind] ?? '#00e5ff'}30`,
-                      }}
-                    >
-                      {part.label}
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" className="opacity-60">
-                        <path d="M1 4h6M4 1l3 3-3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  )
-                )}
+                {isUser
+                  ? <span className="whitespace-pre-wrap">{msg.content}</span>
+                  : <MarkdownContent content={msg.content} nodeMap={effectiveNodeMap} onFocusNode={onFocusNode} />
+                }
                 {msg.isStreaming && (
-                  <span className="inline-block w-0.5 h-3.5 bg-[#7ee787] ml-0.5 animate-pulse rounded-sm align-middle" />
+                  <span className="inline-block w-0.5 h-3.5 bg-[#818cf8] ml-0.5 animate-pulse rounded-sm align-middle" />
                 )}
                 {msg.citations && msg.citations.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-white/8">

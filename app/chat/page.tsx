@@ -7,7 +7,7 @@ import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
 import IssuePanel, { type Issue } from '@/public/components/IssuePanel';
-import { fetchGraph, fetchNodeSummary, postQA, fetchIssueRelatedNodes, type IssueRelatedNodeCandidate } from '@/lib/api';
+import { fetchGraph, fetchNodeSummary, postQA, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
@@ -64,9 +64,7 @@ function ChatContent() {
 
     try {
       const summaryData = await fetchNodeSummary(aId, candidate.node_id);
-      const summary = typeof summaryData.summary === 'string'
-        ? summaryData.summary
-        : JSON.stringify(summaryData.summary, null, 2);
+      const summary = summaryText(summaryData.summary);
       setMessages(prev => prev.map(m =>
         m.id === summaryId ? { ...m, content: summary, isStreaming: false } : m
       ));
@@ -181,7 +179,7 @@ function ChatContent() {
 
     try {
       const data = await fetchNodeSummary(analysisId, node.id);
-      const summary = typeof data.summary === 'string' ? data.summary : JSON.stringify(data.summary, null, 2);
+      const summary = summaryText(data.summary);
       setMessages(prev => prev.map(m =>
         m.id === assistantId
           ? { ...m, content: summary, isStreaming: false, followUps: FOLLOW_UPS[node.kind] ?? [] }
