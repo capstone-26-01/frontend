@@ -1,6 +1,7 @@
 'use client';
 
 import GraphFlow from "./GraphFlow";
+import { SAMPLE_NODES, SAMPLE_EDGES } from "./sampleGraph";
 
 export default function GraphPreview() {
   return (
@@ -17,7 +18,7 @@ export default function GraphPreview() {
       </div>
 
       <div className="relative h-[400px] border-x border-t border-white/5 rounded-t-[3rem] bg-gradient-to-b from-[#7c3aed]/5 to-transparent overflow-hidden">
-        <GraphFlow />
+        <GraphFlow apiNodes={SAMPLE_NODES} apiEdges={SAMPLE_EDGES} />
         <div className="absolute inset-0 bg-gradient-to-t from-[#05070a] via-transparent to-transparent pointer-events-none" />
       </div>
     </div>
