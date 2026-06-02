@@ -13,14 +13,6 @@ export default function Navbar() {
         </svg>
         <span className="font-mono font-black tracking-tighter text-[#00e5ff] text-xl uppercase">GitStarter</span>
       </div>
-
-      <div className="hidden md:flex items-center gap-8 text-[11px] font-bold uppercase tracking-widest text-gray-400">
-        <button className="hover:text-[#00e5ff] transition-colors">Flow Map</button>
-        <button className="hover:text-[#00e5ff] transition-colors">Documentation</button>
-        <button className="px-4 py-1.5 border border-[#00e5ff]/30 rounded-full hover:bg-[#00e5ff]/10 transition-all text-[#00e5ff]">
-          Star on GitHub
-        </button>
-      </div>
     </nav>
   );
 }

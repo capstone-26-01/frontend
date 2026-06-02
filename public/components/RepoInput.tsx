@@ -1,7 +1,11 @@
 'use client';
 
 
-const QUICK_REPOS = ['shadcn/ui', 'facebook/react', 'tailwindlabs/tailwindcss'];
+const QUICK_REPOS: { label: string; repo: string }[] = [
+  { label: 'oop-car', repo: 'sanghyunna/oop-car' },
+  { label: 'facebook/react', repo: 'facebook/react' },
+  { label: 'tailwindlabs/tailwindcss', repo: 'tailwindlabs/tailwindcss' },
+];
 
 interface RepoInputProps {
   value: string;
@@ -54,15 +58,15 @@ export default function RepoInput({ value, onChange, onAnalyze, loading, loading
       )}
 
       <div className="flex items-center gap-2">
-        <span className="text-[10px] font-mono text-gray-700 uppercase tracking-widest">Try:</span>
-        {QUICK_REPOS.map((repo) => (
+        <span className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">Try:</span>
+        {QUICK_REPOS.map(({ label, repo }) => (
           <button
             key={repo}
             onClick={() => { onChange(repo); onAnalyze?.(repo); }}
             disabled={loading}
-            className="text-[10px] font-mono text-gray-500 hover:text-[#00e5ff] border border-white/5 hover:border-[#00e5ff]/30 px-2.5 py-1 rounded-full transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-[11px] font-mono text-gray-200 hover:text-[#00e5ff] border border-white/20 hover:border-[#00e5ff]/50 px-2.5 py-1 rounded-full transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {repo}
+            {label}
           </button>
         ))}
       </div>
