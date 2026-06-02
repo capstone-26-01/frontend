@@ -1244,15 +1244,33 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   useEffect(() => {
     if (!issueHighlightIds || issueHighlightIds.size === 0) return;
+
+    // Expand every ancestor folder of the related nodes so they're actually
+    // rendered — otherwise files inside collapsed folders can't be focused.
+    const { parentMap } = hierarchy;
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const id of issueHighlightIds) {
+        let cur = parentMap.get(id);
+        while (cur !== undefined) {
+          if (!next.has(cur)) { next.add(cur); changed = true; }
+          cur = parentMap.get(cur);
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    // Frame the camera on the related nodes once the expand + relayout settles.
     const targets = Array.from(issueHighlightIds)
       .filter(id => !hiddenNodeIdsByLevel.has(id))
       .map(id => ({ id }));
     if (targets.length === 0) return;
     const t = setTimeout(() => {
       fitView({ nodes: targets, padding: 0.45, duration: 600, maxZoom: 1.3 });
-    }, 90);
+    }, 280);
     return () => clearTimeout(t);
-  }, [issueHighlightIds, hiddenNodeIdsByLevel, fitView]);
+  }, [issueHighlightIds, hiddenNodeIdsByLevel, hierarchy, fitView]);
 
 
   // ─────────────────────────────────────────
