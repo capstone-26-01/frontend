@@ -36,7 +36,7 @@ export default function RepoInput({ value, onChange, onAnalyze, loading, loading
           </span>
           <input
             type="text"
-            placeholder="owner / repository"
+            placeholder="owner/repo or GitHub URL"
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={handleKeyDown}
