@@ -156,8 +156,24 @@ interface ParsedSseEvent {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'https://gitstarter.kro.kr';
 
 export function toGithubUrl(input: string): string {
-  if (input.startsWith('http://') || input.startsWith('https://')) return input;
-  return `https://github.com/${input}`;
+  const trimmed = input.trim();
+
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    try {
+      const url = new URL(trimmed);
+      if (url.hostname === 'github.com') {
+        const parts = url.pathname.split('/').filter(Boolean);
+        if (parts.length === 2 && parts[1].endsWith('.git')) {
+          return `https://github.com/${parts[0]}/${parts[1].slice(0, -4)}`;
+        }
+      }
+    } catch {
+      return trimmed;
+    }
+    return trimmed;
+  }
+
+  return `https://github.com/${trimmed.replace(/\.git$/, '')}`;
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
