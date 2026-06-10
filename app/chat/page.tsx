@@ -257,12 +257,17 @@ function ChatContent() {
     setNodeTrail(prev => [node, ...prev.filter(n => n.id !== node.id)].slice(0, 4));
     if (chatCollapsed) setChatCollapsed(false);
 
-    setMessages(prev => [...prev, {
+    const contextMessage: Message = {
       id: `ctx-${Date.now()}`,
       role: 'node-context',
       content: '',
       node,
-    }]);
+    };
+    setMessages(prev =>
+      prev.at(-1)?.role === 'node-context'
+        ? [...prev.slice(0, -1), contextMessage]
+        : [...prev, contextMessage]
+    );
   }, [chatCollapsed]);
 
   const handleSend = useCallback(async (text: string, contextNode: NodeInfo | null) => {
