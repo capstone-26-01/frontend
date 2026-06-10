@@ -77,6 +77,8 @@ const LEVEL_EDGE_KINDS: Record<ViewLevel, string[]> = {
   all:      ['contains'],
 };
 
+const DEFAULT_HIDDEN_KINDS = new Set(['external', 'method']);
+
 interface ClassData {
   label: string;
   kind: NodeKind;
@@ -951,6 +953,22 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     return { parentMap, childrenMap, hasChildren };
   }, [edges]);
 
+  const issueFocusActive = issueHighlightIds !== null;
+  const issueVisibleIds = useMemo(() => {
+    if (!issueHighlightIds) return null;
+    const visible = new Set(issueHighlightIds);
+    for (const id of issueHighlightIds) {
+      const seen = new Set<string>();
+      let cur = hierarchy.parentMap.get(id);
+      while (cur !== undefined && !seen.has(cur)) {
+        visible.add(cur);
+        seen.add(cur);
+        cur = hierarchy.parentMap.get(cur);
+      }
+    }
+    return visible;
+  }, [issueHighlightIds, hierarchy]);
+
   const kindById = useMemo(
     () => new Map(nodes.map(n => [n.id, (n.data as ClassData).kind as string])),
     [nodes]
@@ -975,6 +993,8 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
     const allowed = LEVEL_NODE_KINDS[level];
     const { parentMap } = hierarchy;
     const isVisible = (id: string, kind: string) => {
+      if (issueVisibleIds) return issueVisibleIds.has(id);
+      if (DEFAULT_HIDDEN_KINDS.has(kind)) return false;
       if (!allowed.has(kind)) return false;
       let cur = parentMap.get(id);
       while (cur !== undefined) {
@@ -993,14 +1013,15 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       const pos = new Map(laid.map(n => [n.id, n.position]));
       return prev.map(n => (pos.has(n.id) ? { ...n, position: pos.get(n.id)! } : n));
     });
-  }, [hierarchy, edges, setNodes]);
+  }, [hierarchy, edges, issueVisibleIds, setNodes]);
 
   // Recompute layout + refit whenever expansion / view / layout changes
   useEffect(() => {
     layoutVisible(layout, expandedIds, viewLevel);
+    if (issueFocusActive) return;
     const t = setTimeout(() => fitView({ padding: 0.2, duration: 450 }), 90);
     return () => clearTimeout(t);
-  }, [expandedIds, viewLevel, layout, layoutVisible, fitView]);
+  }, [expandedIds, viewLevel, layout, layoutVisible, fitView, issueFocusActive]);
 
   // activeEdgeKinds가 비어있으면(초기값) 전체 허용
   const visibleEdges = useMemo(
@@ -1009,6 +1030,13 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       : edges.filter((e) => activeEdgeKinds.has(e.data?.kind as EdgeKind)),
     [edges, activeEdgeKinds]
   );
+  const issueEdges = useMemo(
+    () => issueVisibleIds
+      ? edges.filter((e) => issueVisibleIds.has(e.source) && issueVisibleIds.has(e.target))
+      : [],
+    [edges, issueVisibleIds]
+  );
+  const edgeRenderSource = issueFocusActive ? issueEdges : visibleEdges;
 
   const handleToggleEdge = useCallback((kind: EdgeKind) => {
     setActiveEdgeKinds((prev) => {
@@ -1028,7 +1056,10 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   const hiddenNodeIdsByLevel = useMemo(() => {
     const allowed = LEVEL_NODE_KINDS[viewLevel];
-    return new Set(nodes.filter(n => !allowed.has((n.data as ClassData).kind)).map(n => n.id));
+    return new Set(nodes.filter(n => {
+      const kind = (n.data as ClassData).kind;
+      return DEFAULT_HIDDEN_KINDS.has(kind) || !allowed.has(kind);
+    }).map(n => n.id));
   }, [nodes, viewLevel]);
 
 
@@ -1151,18 +1182,19 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // ─────────────────────────────────────────
   const displayNodes = useMemo(() => {
     return nodes.map((n) => {
-      const hidden = hiddenNodeIdsByLevel.has(n.id) || collapsedHiddenIds.has(n.id);
+      const hidden = issueFocusActive
+        ? !issueVisibleIds?.has(n.id)
+        : hiddenNodeIdsByLevel.has(n.id) || collapsedHiddenIds.has(n.id);
 
       let dimmed = false;
       let highlighted = false;
 
-      if (hoveredId) {
-        const neighbors = getNeighborIds(hoveredId, visibleEdges);
+      if (issueFocusActive) {
+        highlighted = issueHighlightIds?.has(n.id) ?? false;
+      } else if (hoveredId) {
+        const neighbors = getNeighborIds(hoveredId, edgeRenderSource);
         dimmed = n.id !== hoveredId && !neighbors.has(n.id);
         highlighted = n.id === hoveredId || neighbors.has(n.id);
-      } else if (issueHighlightIds) {
-        dimmed = !issueHighlightIds.has(n.id);
-        highlighted = issueHighlightIds.has(n.id);
       } else if (pathIds) {
         dimmed = !pathIds.has(n.id);
         highlighted = pathIds.has(n.id);
@@ -1176,14 +1208,14 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
         data: { ...n.data, dimmed, highlighted: highlighted || flashing, flashing, expandable, expanded: expandable && expandedIds.has(n.id) },
       };
     });
-  }, [nodes, hoveredId, issueHighlightIds, pathIds, visibleEdges, flashId, hiddenNodeIdsByLevel, collapsedHiddenIds, hierarchy, expandedIds]);
+  }, [nodes, hoveredId, issueHighlightIds, issueFocusActive, issueVisibleIds, pathIds, edgeRenderSource, flashId, hiddenNodeIdsByLevel, collapsedHiddenIds, hierarchy, expandedIds]);
 
   // Edge dim on hover / path + bundling + level filter + base opacity
   const displayEdges = useMemo(() => {
     const sourceCounts: Record<string, number> = {};
-    visibleEdges.forEach((e) => { sourceCounts[e.source] = (sourceCounts[e.source] ?? 0) + 1; });
+    edgeRenderSource.forEach((e) => { sourceCounts[e.source] = (sourceCounts[e.source] ?? 0) + 1; });
 
-    return visibleEdges.map((e) => {
+    return edgeRenderSource.map((e) => {
       const hiddenByLevel =
         hiddenNodeIdsByLevel.has(e.source) || hiddenNodeIdsByLevel.has(e.target) ||
         collapsedHiddenIds.has(e.source) || collapsedHiddenIds.has(e.target);
@@ -1195,20 +1227,18 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
       if (hoveredId) {
         const direct = e.source === hoveredId || e.target === hoveredId;
         opacity = direct ? 1 : 0.06;
-      } else if (issueHighlightIds) {
-        opacity = issueHighlightIds.has(e.source) && issueHighlightIds.has(e.target) ? baseOpacity : 0.04;
       } else if (pathIds) {
         opacity = pathIds.has(e.source) && pathIds.has(e.target) ? baseOpacity : 0.06;
       }
       return {
         ...e,
         type: 'bundledEdge',
-        hidden: hiddenByLevel,
+        hidden: issueFocusActive ? false : hiddenByLevel,
         data: { ...(e.data ?? {}), bundled: sourceCounts[e.source] > 1 },
         style: { ...e.style, opacity },
       };
     });
-  }, [visibleEdges, hoveredId, issueHighlightIds, pathIds, hiddenNodeIdsByLevel, collapsedHiddenIds]);
+  }, [edgeRenderSource, hoveredId, issueFocusActive, pathIds, hiddenNodeIdsByLevel, collapsedHiddenIds]);
 
   // ─────────────────────────────────────────
   // ③ Search: highlight + camera jump
@@ -1216,8 +1246,11 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   const searchMatches = useMemo(() => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
-    return nodes.filter((n) => (n.data as ClassData).label.toLowerCase().includes(q));
-  }, [query, nodes]);
+    return nodes.filter((n) =>
+      (!issueVisibleIds || issueVisibleIds.has(n.id)) &&
+      (n.data as ClassData).label.toLowerCase().includes(q)
+    );
+  }, [query, nodes, issueVisibleIds]);
 
   // Jump camera to first match
   useEffect(() => {
@@ -1243,34 +1276,18 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   // Focus camera on issue-related nodes when an issue is selected
   // ─────────────────────────────────────────
   useEffect(() => {
-    if (!issueHighlightIds || issueHighlightIds.size === 0) return;
+    if (!issueVisibleIds || issueVisibleIds.size === 0) return;
 
-    // Expand every ancestor folder of the related nodes so they're actually
-    // rendered — otherwise files inside collapsed folders can't be focused.
-    const { parentMap } = hierarchy;
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of issueHighlightIds) {
-        let cur = parentMap.get(id);
-        while (cur !== undefined) {
-          if (!next.has(cur)) { next.add(cur); changed = true; }
-          cur = parentMap.get(cur);
-        }
-      }
-      return changed ? next : prev;
-    });
-
-    // Frame the camera on the related nodes once the expand + relayout settles.
-    const targets = Array.from(issueHighlightIds)
-      .filter(id => !hiddenNodeIdsByLevel.has(id))
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const targets = Array.from(issueVisibleIds)
+      .filter(id => nodeIds.has(id))
       .map(id => ({ id }));
     if (targets.length === 0) return;
     const t = setTimeout(() => {
       fitView({ nodes: targets, padding: 0.45, duration: 600, maxZoom: 1.3 });
     }, 280);
     return () => clearTimeout(t);
-  }, [issueHighlightIds, hiddenNodeIdsByLevel, hierarchy, fitView]);
+  }, [issueVisibleIds, nodes, fitView]);
 
 
   // ─────────────────────────────────────────
@@ -1292,22 +1309,17 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
   useEffect(() => {
     if (!apiNodes || !apiEdges) return;
 
-    // external(속성 참조)·method(개별 메서드) 는 노이즈 — 기본 필터
-    const HIDDEN_KINDS = new Set(['external', 'method']);
-    const visibleNodeIds = new Set(
-      apiNodes.filter(n => !HIDDEN_KINDS.has(n.kind)).map(n => n.id)
-    );
+    const nodeIds = new Set(apiNodes.map(n => n.id));
 
     const rfNodes: Node<ClassData>[] = apiNodes
-      .filter(n => !HIDDEN_KINDS.has(n.kind))
       .map(n => ({
         id: n.id, type: 'classNode', position: { x: 0, y: 0 },
         data: { label: n.label, kind: (n.kind in KIND_THEME ? n.kind : 'concrete') as NodeKind, methods: n.methods ?? [], properties: n.properties },
       }));
 
-    // 양 끝 노드가 모두 visible 한 엣지만 포함
+    // Keep API edges whose endpoints exist; visibility is derived later.
     const rfEdges: Edge[] = apiEdges
-      .filter(e => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target))
+      .filter(e => nodeIds.has(e.source) && nodeIds.has(e.target))
       .map(e => ({
         id: e.id ?? `${e.source}-${e.target}`,
         source: e.source, target: e.target,
