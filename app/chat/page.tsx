@@ -244,7 +244,7 @@ function ChatContent() {
     };
   }, []);
 
-  const handleNodeSelect = useCallback(async (node: NodeInfo) => {
+  const handleNodeSelect = useCallback((node: NodeInfo) => {
     setNodeTrail(prev => [node, ...prev.filter(n => n.id !== node.id)].slice(0, 4));
     if (chatCollapsed) setChatCollapsed(false);
 
@@ -254,28 +254,7 @@ function ChatContent() {
       content: '',
       node,
     }]);
-
-    if (analysisId == null) return;
-
-    const assistantId = `ns-${Date.now()}`;
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', isStreaming: true }]);
-
-    try {
-      const data = await fetchNodeSummary(analysisId, node.id);
-      const summary = summaryText(data.summary);
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId
-          ? { ...m, content: summary, isStreaming: false, followUps: FOLLOW_UPS[node.kind] ?? [] }
-          : m
-      ));
-    } catch {
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId
-          ? { ...m, content: `No summary available for \`${node.label}\`.`, isStreaming: false }
-          : m
-      ));
-    }
-  }, [analysisId, chatCollapsed]);
+  }, [chatCollapsed]);
 
   const handleSend = useCallback(async (text: string, contextNode: NodeInfo | null) => {
     const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text };
