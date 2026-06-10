@@ -7,7 +7,7 @@ import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
 import IssuePanel, { type Issue } from '@/public/components/IssuePanel';
-import { fetchGraph, fetchNodeSummary, postQA, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
+import { fetchGraph, fetchNodeSummary, postQAStream, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
@@ -183,7 +183,7 @@ function ChatContent() {
     } catch {
       setIssueHighlightIds(null);
     }
-  }, [analysisId, chatCollapsed]);
+  }, [analysisId, fetchCandidateSummary]);
 
   // Graph data
   const [apiNodes, setApiNodes] = useState<RepoGraphNode[] | null>(null);
@@ -195,6 +195,15 @@ function ChatContent() {
   const hasDragged = useRef(false);
   const graphRef = useRef<GraphFlowHandle>(null);
   const overviewKey = useRef<string | null>(null);
+  const qaAbortRef = useRef<AbortController | null>(null);
+  const qaRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      qaRequestIdRef.current += 1;
+      qaAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!repoUrl) return;
@@ -278,41 +287,68 @@ function ChatContent() {
   }, [analysisId, chatCollapsed]);
 
   const handleSend = useCallback(async (text: string, contextNode: NodeInfo | null) => {
+    qaAbortRef.current?.abort();
+    const controller = new AbortController();
+    const requestId = qaRequestIdRef.current + 1;
+    qaRequestIdRef.current = requestId;
+    qaAbortRef.current = controller;
+
     const userMsg: Message = { id: `u-${Date.now()}`, role: 'user', content: text };
     const assistantId = `a-${Date.now() + 1}`;
+    const isActive = () => qaRequestIdRef.current === requestId && !controller.signal.aborted;
 
     setMessages(prev => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '', isStreaming: true }]);
 
     try {
-      const data = await postQA({
-        repo_url: repoUrl,
-        question: text,
-        analysis_id: analysisId ?? undefined,
-        selected_node_id: contextNode?.id,
-        revision,
-      });
+      const data = await postQAStream(
+        {
+          repo_url: repoUrl,
+          question: text,
+          analysis_id: analysisId ?? undefined,
+          selected_node_id: contextNode?.id,
+          revision,
+        },
+        {
+          signal: controller.signal,
+          onToken: token => {
+            if (!isActive()) return;
+            setMessages(prev => prev.map(m =>
+              m.id === assistantId ? { ...m, content: `${m.content}${token}` } : m
+            ));
+          },
+        }
+      );
+
+      if (!isActive()) return;
 
       setMessages(prev => prev.map(m =>
         m.id === assistantId
           ? {
               ...m,
-              content: data.answer,
+              content: data.answer || m.content,
               isStreaming: false,
               followUps: contextNode ? (FOLLOW_UPS[contextNode.kind] ?? []) : [],
               citations: data.citations?.length ? data.citations : undefined,
             }
           : m
       ));
-    } catch {
+    } catch (error) {
+      if (!isActive() || (error as Error).name === 'AbortError') return;
+
       setMessages(prev => prev.map(m =>
         m.id === assistantId
           ? { ...m, content: 'Failed to get response. Please try again.', isStreaming: false }
           : m
       ));
+    } finally {
+      if (qaRequestIdRef.current === requestId) qaAbortRef.current = null;
     }
   }, [repoUrl, analysisId, revision]);
 
   const handleClear = useCallback(() => {
+    qaRequestIdRef.current += 1;
+    qaAbortRef.current?.abort();
+    qaAbortRef.current = null;
     setMessages(INITIAL_MESSAGES);
     setNodeTrail([]);
   }, []);

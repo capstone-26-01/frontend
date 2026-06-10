@@ -143,6 +143,16 @@ export interface QAResponse {
   warnings: unknown;
 }
 
+interface QAStreamOptions {
+  onToken: (text: string) => void;
+  signal?: AbortSignal;
+}
+
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+}
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'https://gitstarter.kro.kr';
 
 export function toGithubUrl(input: string): string {
@@ -184,6 +194,127 @@ export async function postQA(req: QARequest): Promise<QAResponse> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...req, repo_url: toGithubUrl(req.repo_url) }),
   });
+}
+
+function parseSseEvent(block: string): ParsedSseEvent | null {
+  let event = 'message';
+  const data: string[] = [];
+
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(':')) continue;
+
+    const separator = line.indexOf(':');
+    const field = separator === -1 ? line : line.slice(0, separator);
+    let value = separator === -1 ? '' : line.slice(separator + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+
+    if (field === 'event') event = value;
+    if (field === 'data') data.push(value);
+  }
+
+  if (!data.length) return null;
+  return { event, data: data.join('\n') };
+}
+
+function asQAResponse(data: unknown): QAResponse {
+  return data as QAResponse;
+}
+
+export async function postQAStream(req: QARequest, options: QAStreamOptions): Promise<QAResponse> {
+  if (typeof ReadableStream === 'undefined') {
+    return postQA(req);
+  }
+
+  const res = await fetch(`${API_BASE}/api/qa/`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({ ...req, repo_url: toGithubUrl(req.repo_url), stream: true }),
+    signal: options.signal,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `Request failed: ${res.status}`);
+  }
+
+  const contentType = res.headers.get('Content-Type')?.toLowerCase() ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    return res.json() as Promise<QAResponse>;
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    return postQA(req);
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResponse: QAResponse | null = null;
+  let receivedToken = false;
+
+  const handleEvent = (event: ParsedSseEvent) => {
+    if (event.data === '[DONE]') return;
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(event.data);
+    } catch {
+      throw new Error('Invalid SSE payload');
+    }
+
+    if (event.event === 'token') {
+      const text = typeof (payload as { text?: unknown }).text === 'string'
+        ? (payload as { text: string }).text
+        : '';
+      if (text) {
+        receivedToken = true;
+        options.onToken(text);
+      }
+      return;
+    }
+
+    if (event.event === 'final') {
+      finalResponse = asQAResponse(payload);
+      return;
+    }
+
+    if (event.event === 'error') {
+      const errorPayload = payload as { error?: unknown; detail?: unknown };
+      const message = typeof errorPayload.error === 'string'
+        ? errorPayload.error
+        : typeof errorPayload.detail === 'string'
+          ? errorPayload.detail
+          : 'QA streaming failed';
+      throw new Error(message);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() ?? '';
+
+    for (const block of events) {
+      const event = parseSseEvent(block);
+      if (event) handleEvent(event);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const event = parseSseEvent(buffer);
+    if (event) handleEvent(event);
+  }
+
+  if (finalResponse) return finalResponse;
+  if (!receivedToken) return postQA(req);
+  throw new Error('QA stream ended before final response');
 }
 
 export async function postAnalysis(repoUrl: string, revision?: string): Promise<AnalysisResponse> {
