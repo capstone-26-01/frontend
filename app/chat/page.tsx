@@ -97,8 +97,15 @@ function ChatContent() {
   // Issue selection
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [issueHighlightIds, setIssueHighlightIds] = useState<Set<string> | null>(null);
+  const issueRequestIdRef = useRef(0);
 
-  const fetchCandidateSummary = useCallback(async (candidate: IssueRelatedNodeCandidate, aId: number) => {
+  const fetchCandidateSummary = useCallback(async (
+    candidate: IssueRelatedNodeCandidate,
+    aId: number,
+    isActive: () => boolean,
+  ) => {
+    if (!isActive()) return;
+
     const nodeInfo: NodeInfo = {
       id: candidate.node.id,
       label: candidate.node.label,
@@ -118,11 +125,15 @@ function ChatContent() {
 
     try {
       const summaryData = await fetchNodeSummary(aId, candidate.node_id);
+      if (!isActive()) return;
+
       const summary = summaryText(summaryData.summary);
       setMessages(prev => prev.map(m =>
         m.id === summaryId ? { ...m, content: summary, isStreaming: false } : m
       ));
     } catch {
+      if (!isActive()) return;
+
       setMessages(prev => prev.map(m =>
         m.id === summaryId
           ? { ...m, content: `\`${candidate.node.label}\` 요약을 불러올 수 없습니다.`, isStreaming: false }
@@ -132,6 +143,10 @@ function ChatContent() {
   }, []);
 
   const handleSelectIssue = useCallback(async (issue: Issue | null) => {
+    const requestId = issueRequestIdRef.current + 1;
+    issueRequestIdRef.current = requestId;
+    const isActive = () => issueRequestIdRef.current === requestId;
+
     setSelectedIssue(issue);
     if (!issue || analysisId == null) {
       setIssueHighlightIds(null);
@@ -145,6 +160,8 @@ function ChatContent() {
 
     try {
       const data = await fetchIssueRelatedNodes({ analysis_id: analysisId, issue_number: issue.number });
+      if (!isActive()) return;
+
       setIssueHighlightIds(new Set(data.selected_node_ids));
 
       const candidates = data.candidates;
@@ -178,9 +195,12 @@ function ChatContent() {
       // 상위 3개 candidates에 대해 node-context + summary
       const top = candidates.slice(0, 3);
       for (const candidate of top) {
-        await fetchCandidateSummary(candidate, analysisId);
+        if (!isActive()) return;
+        await fetchCandidateSummary(candidate, analysisId, isActive);
       }
     } catch {
+      if (!isActive()) return;
+
       setIssueHighlightIds(null);
     }
   }, [analysisId, fetchCandidateSummary]);
@@ -331,6 +351,7 @@ function ChatContent() {
 
   const handleClear = useCallback(() => {
     qaRequestIdRef.current += 1;
+    issueRequestIdRef.current += 1;
     qaAbortRef.current?.abort();
     qaAbortRef.current = null;
     setMessages(INITIAL_MESSAGES);
