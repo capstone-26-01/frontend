@@ -99,6 +99,27 @@ function ChatContent() {
   const [issueHighlightIds, setIssueHighlightIds] = useState<Set<string> | null>(null);
   const issueRequestIdRef = useRef(0);
 
+  // Bottom toast shown while the (~45s) issue analysis request is in flight
+  const [analysisToast, setAnalysisToast] = useState<{ issueNumber: number; phase: 'pending' | 'error' } | null>(null);
+  const [analysisElapsed, setAnalysisElapsed] = useState(0);
+
+  // Tick the elapsed-seconds counter while an analysis is pending
+  useEffect(() => {
+    if (analysisToast?.phase !== 'pending') return;
+    setAnalysisElapsed(0);
+    const id = setInterval(() => setAnalysisElapsed(e => e + 1), 1000);
+    return () => clearInterval(id);
+  }, [analysisToast]);
+
+  // Auto-dismiss the error toast after a few seconds
+  useEffect(() => {
+    if (analysisToast?.phase !== 'error') return;
+    const t = setTimeout(() => {
+      setAnalysisToast(cur => (cur === analysisToast ? null : cur));
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [analysisToast]);
+
   const fetchCandidateSummary = useCallback(async (
     candidate: IssueRelatedNodeCandidate,
     aId: number,
@@ -151,17 +172,20 @@ function ChatContent() {
     if (!issue || analysisId == null) {
       setIssueHighlightIds(null);
       setIssueCollapsed(false); // reopen issue list when deselected
+      setAnalysisToast(null);
       return;
     }
 
     // Selecting an issue: close the issue list, open the chat
     setIssueCollapsed(true);
     setChatCollapsed(false);
+    setAnalysisToast({ issueNumber: issue.number, phase: 'pending' });
 
     try {
       const data = await fetchIssueRelatedNodes({ analysis_id: analysisId, issue_number: issue.number });
       if (!isActive()) return;
 
+      setAnalysisToast(null); // analysis result is in — dismiss the waiting toast
       setIssueHighlightIds(new Set(data.selected_node_ids));
 
       const candidates = data.candidates;
@@ -202,6 +226,7 @@ function ChatContent() {
       if (!isActive()) return;
 
       setIssueHighlightIds(null);
+      setAnalysisToast({ issueNumber: issue.number, phase: 'error' });
     }
   }, [analysisId, fetchCandidateSummary]);
 
@@ -595,6 +620,38 @@ function ChatContent() {
           </div>
         </div>
       </div>
+
+      {/* Bottom toast: issue analysis progress (~45s) */}
+      {analysisToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div
+            className="flex items-center gap-3 px-4 py-2.5 rounded-lg border backdrop-blur-md font-mono text-xs shadow-xl"
+            style={
+              analysisToast.phase === 'error'
+                ? { background: 'rgba(26,13,13,0.85)', borderColor: 'rgba(239,68,68,0.35)', color: '#fca5a5' }
+                : { background: 'rgba(11,20,36,0.85)', borderColor: 'rgba(0,229,255,0.30)', color: '#a8d4e4' }
+            }
+          >
+            {analysisToast.phase === 'pending' ? (
+              <>
+                <div
+                  className="w-4 h-4 rounded-full animate-spin shrink-0"
+                  style={{ border: '2px solid rgba(0,229,255,0.25)', borderTopColor: '#00e5ff' }}
+                />
+                <span>
+                  Issue #{analysisToast.issueNumber} 분석 중… 평균 45초쯤 걸려요
+                  <span className="ml-1.5 text-[#5fa8c0]">({analysisElapsed}s)</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-[#f87171] shrink-0">⚠</span>
+                <span>Issue #{analysisToast.issueNumber} 분석에 실패했어요. 다시 시도해 주세요.</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
