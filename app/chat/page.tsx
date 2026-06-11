@@ -7,7 +7,7 @@ import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
 import IssuePanel, { type Issue } from '@/public/components/IssuePanel';
-import { fetchGraph, fetchNodeSummary, postQAStream, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
+import { fetchGraph, fetchGraphByAnalysisId, fetchNodeSummary, postQAStream, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
@@ -20,7 +20,7 @@ const FOLLOW_UPS: Record<string, string[]> = {
 const INITIAL_MESSAGES: Message[] = [{
   id: 'init',
   role: 'assistant',
-  content: 'Graph loaded. Click any node to explore it, or ask me anything about this codebase.',
+  content: 'When the graph is ready, click any node to explore it, or ask me anything about this codebase.',
 }];
 
 const ISSUE_PANEL_WIDTH = 260;
@@ -97,8 +97,15 @@ function ChatContent() {
   // Issue selection
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [issueHighlightIds, setIssueHighlightIds] = useState<Set<string> | null>(null);
+  const issueRequestIdRef = useRef(0);
 
-  const fetchCandidateSummary = useCallback(async (candidate: IssueRelatedNodeCandidate, aId: number) => {
+  const fetchCandidateSummary = useCallback(async (
+    candidate: IssueRelatedNodeCandidate,
+    aId: number,
+    isActive: () => boolean,
+  ) => {
+    if (!isActive()) return;
+
     const nodeInfo: NodeInfo = {
       id: candidate.node.id,
       label: candidate.node.label,
@@ -118,11 +125,15 @@ function ChatContent() {
 
     try {
       const summaryData = await fetchNodeSummary(aId, candidate.node_id);
+      if (!isActive()) return;
+
       const summary = summaryText(summaryData.summary);
       setMessages(prev => prev.map(m =>
         m.id === summaryId ? { ...m, content: summary, isStreaming: false } : m
       ));
     } catch {
+      if (!isActive()) return;
+
       setMessages(prev => prev.map(m =>
         m.id === summaryId
           ? { ...m, content: `\`${candidate.node.label}\` 요약을 불러올 수 없습니다.`, isStreaming: false }
@@ -132,6 +143,10 @@ function ChatContent() {
   }, []);
 
   const handleSelectIssue = useCallback(async (issue: Issue | null) => {
+    const requestId = issueRequestIdRef.current + 1;
+    issueRequestIdRef.current = requestId;
+    const isActive = () => issueRequestIdRef.current === requestId;
+
     setSelectedIssue(issue);
     if (!issue || analysisId == null) {
       setIssueHighlightIds(null);
@@ -145,6 +160,8 @@ function ChatContent() {
 
     try {
       const data = await fetchIssueRelatedNodes({ analysis_id: analysisId, issue_number: issue.number });
+      if (!isActive()) return;
+
       setIssueHighlightIds(new Set(data.selected_node_ids));
 
       const candidates = data.candidates;
@@ -178,9 +195,12 @@ function ChatContent() {
       // 상위 3개 candidates에 대해 node-context + summary
       const top = candidates.slice(0, 3);
       for (const candidate of top) {
-        await fetchCandidateSummary(candidate, analysisId);
+        if (!isActive()) return;
+        await fetchCandidateSummary(candidate, analysisId, isActive);
       }
     } catch {
+      if (!isActive()) return;
+
       setIssueHighlightIds(null);
     }
   }, [analysisId, fetchCandidateSummary]);
@@ -206,15 +226,23 @@ function ChatContent() {
   }, []);
 
   useEffect(() => {
-    if (!repoUrl) return;
+    if (analysisId == null && !repoUrl) return;
+
+    let cancelled = false;
     setGraphLoading(true);
-    fetchGraph(repoUrl, revision)
+    const request = analysisId != null
+      ? fetchGraphByAnalysisId(analysisId)
+      : fetchGraph(repoUrl, revision);
+
+    request
       .then(data => {
+        if (cancelled) return;
         setApiNodes(data.nodes);
         setApiEdges(data.edges);
         // Auto-post a newcomer overview once per repo
-        if (overviewKey.current !== repoUrl && data.nodes.length > 0) {
-          overviewKey.current = repoUrl;
+        const overviewId = data.repo || repoUrl || `analysis:${data.analysis_id ?? ''}`;
+        if (overviewKey.current !== overviewId && data.nodes.length > 0) {
+          overviewKey.current = overviewId;
           const name = data.repo || repoName || repoUrl.replace('https://github.com/', '');
           setMessages(prev => [...prev, {
             id: `overview-${Date.now()}`,
@@ -224,8 +252,12 @@ function ChatContent() {
         }
       })
       .catch(() => {})
-      .finally(() => setGraphLoading(false));
-  }, [repoUrl, revision, repoName]);
+      .finally(() => {
+        if (!cancelled) setGraphLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [repoUrl, analysisId, revision, repoName]);
 
   const nodeMapForChat = useMemo<NodeMapEntry[]>(
     () => (apiNodes ?? []).map(n => ({ label: n.label, id: n.id, kind: n.kind })),
@@ -331,6 +363,7 @@ function ChatContent() {
 
   const handleClear = useCallback(() => {
     qaRequestIdRef.current += 1;
+    issueRequestIdRef.current += 1;
     qaAbortRef.current?.abort();
     qaAbortRef.current = null;
     setMessages(INITIAL_MESSAGES);
@@ -479,6 +512,8 @@ function ChatContent() {
             apiNodes={apiNodes}
             apiEdges={apiEdges}
             loading={graphLoading}
+            loadingTitle="Analyzing repository"
+            loadingDescription="첫 분석은 저장소를 클론하고 그래프를 만드는 중이라 몇 분 걸릴 수 있어요. 완료되면 자동으로 그래프가 열립니다."
             issueHighlightIds={issueHighlightIds}
           />
         </div>

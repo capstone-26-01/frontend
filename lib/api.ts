@@ -48,6 +48,28 @@ export interface AnalysisByIdResponse {
   error: unknown;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function graphFromAnalysisResponse(data: AnalysisResponse | AnalysisByIdResponse): RepoGraphResponse | null {
+  if (!isRecord(data.artifact)) return null;
+
+  const { artifact } = data;
+  if (!Array.isArray(artifact.nodes) || !Array.isArray(artifact.edges)) return null;
+
+  return {
+    analysis_id: data.analysis_id,
+    repo: typeof artifact.repo === 'string' ? artifact.repo : data.repo,
+    revision: typeof artifact.revision === 'string' ? artifact.revision : data.revision,
+    nodes: artifact.nodes as RepoGraphNode[],
+    edges: artifact.edges as RepoGraphEdge[],
+    entrypoints: artifact.entrypoints ?? [],
+    key_modules: artifact.key_modules ?? [],
+    warnings: artifact.warnings ?? data.warnings ?? [],
+  };
+}
+
 export interface GraphDiffResponse {
   repo: string;
   base: unknown;
@@ -343,6 +365,20 @@ export async function postAnalysis(repoUrl: string, revision?: string): Promise<
 
 export async function fetchAnalysisById(analysisId: number): Promise<AnalysisByIdResponse> {
   return apiFetch<AnalysisByIdResponse>(`/api/analysis/${analysisId}/`);
+}
+
+export async function fetchGraphByAnalysisId(analysisId: number): Promise<RepoGraphResponse> {
+  const data = await fetchAnalysisById(analysisId);
+  if (data.status === 'failed' || data.status === 'error') {
+    throw new Error('Analysis failed on the server.');
+  }
+
+  const graph = graphFromAnalysisResponse(data);
+  if (!graph) {
+    throw new Error('Analysis is still running. Please wait a moment and try again.');
+  }
+
+  return graph;
 }
 
 export async function fetchAnalysisDiff(analysisId: number, base: number): Promise<GraphDiffResponse> {
