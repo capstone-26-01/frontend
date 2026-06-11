@@ -7,7 +7,7 @@ import GraphFlow from '@/public/components/GraphFlow';
 import ChatPanel, { type Message, type NodeMapEntry } from '@/public/components/chat/ChatPanel';
 import type { NodeInfo, GraphFlowHandle } from '@/public/components/GraphFlow';
 import IssuePanel, { type Issue } from '@/public/components/IssuePanel';
-import { fetchGraph, fetchNodeSummary, postQAStream, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
+import { fetchGraph, fetchGraphByAnalysisId, fetchNodeSummary, postQAStream, fetchIssueRelatedNodes, summaryText, type IssueRelatedNodeCandidate } from '@/lib/api';
 import type { RepoGraphNode, RepoGraphEdge } from '@/lib/api';
 
 const FOLLOW_UPS: Record<string, string[]> = {
@@ -20,7 +20,7 @@ const FOLLOW_UPS: Record<string, string[]> = {
 const INITIAL_MESSAGES: Message[] = [{
   id: 'init',
   role: 'assistant',
-  content: 'Graph loaded. Click any node to explore it, or ask me anything about this codebase.',
+  content: 'When the graph is ready, click any node to explore it, or ask me anything about this codebase.',
 }];
 
 const ISSUE_PANEL_WIDTH = 260;
@@ -226,15 +226,23 @@ function ChatContent() {
   }, []);
 
   useEffect(() => {
-    if (!repoUrl) return;
+    if (analysisId == null && !repoUrl) return;
+
+    let cancelled = false;
     setGraphLoading(true);
-    fetchGraph(repoUrl, revision)
+    const request = analysisId != null
+      ? fetchGraphByAnalysisId(analysisId)
+      : fetchGraph(repoUrl, revision);
+
+    request
       .then(data => {
+        if (cancelled) return;
         setApiNodes(data.nodes);
         setApiEdges(data.edges);
         // Auto-post a newcomer overview once per repo
-        if (overviewKey.current !== repoUrl && data.nodes.length > 0) {
-          overviewKey.current = repoUrl;
+        const overviewId = data.repo || repoUrl || `analysis:${data.analysis_id ?? ''}`;
+        if (overviewKey.current !== overviewId && data.nodes.length > 0) {
+          overviewKey.current = overviewId;
           const name = data.repo || repoName || repoUrl.replace('https://github.com/', '');
           setMessages(prev => [...prev, {
             id: `overview-${Date.now()}`,
@@ -244,8 +252,12 @@ function ChatContent() {
         }
       })
       .catch(() => {})
-      .finally(() => setGraphLoading(false));
-  }, [repoUrl, revision, repoName]);
+      .finally(() => {
+        if (!cancelled) setGraphLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [repoUrl, analysisId, revision, repoName]);
 
   const nodeMapForChat = useMemo<NodeMapEntry[]>(
     () => (apiNodes ?? []).map(n => ({ label: n.label, id: n.id, kind: n.kind })),
@@ -500,6 +512,8 @@ function ChatContent() {
             apiNodes={apiNodes}
             apiEdges={apiEdges}
             loading={graphLoading}
+            loadingTitle="Analyzing repository"
+            loadingDescription="첫 분석은 저장소를 클론하고 그래프를 만드는 중이라 몇 분 걸릴 수 있어요. 완료되면 자동으로 그래프가 열립니다."
             issueHighlightIds={issueHighlightIds}
           />
         </div>

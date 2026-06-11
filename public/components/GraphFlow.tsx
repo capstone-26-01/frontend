@@ -50,6 +50,8 @@ interface GraphFlowProps {
   apiNodes?: RepoGraphNode[] | null;
   apiEdges?: RepoGraphEdge[] | null;
   loading?: boolean;
+  loadingTitle?: string;
+  loadingDescription?: string;
   issueHighlightIds?: Set<string> | null;
 }
 type EdgeKind = string;
@@ -877,7 +879,15 @@ function GraphControls({ onExpandAll, onCollapseAll, treeable }: { onExpandAll: 
 // Main inner component (needs useReactFlow)
 // ─────────────────────────────────────────────
 
-const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({ onNodeSelect, apiNodes, apiEdges, loading, issueHighlightIds }, ref) {
+const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlowInner({
+  onNodeSelect,
+  apiNodes,
+  apiEdges,
+  loading,
+  loadingTitle = 'Loading graph…',
+  loadingDescription,
+  issueHighlightIds,
+}, ref) {
   const { setCenter, getNode, fitView } = useReactFlow();
 
   // ── State ──────────────────────────────────
@@ -1363,7 +1373,14 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
             borderTopColor: '#00e5ff', borderRadius: '50%',
             animation: 'spin 0.8s linear infinite',
           }} />
-          <span style={{ fontSize: 11, color: '#00e5ff88', letterSpacing: '0.1em' }}>Loading graph…</span>
+          <span style={{ fontSize: 11, color: '#00e5ff88', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            {loadingTitle}
+          </span>
+          {loadingDescription && (
+            <span style={{ maxWidth: 360, textAlign: 'center', fontSize: 12, lineHeight: 1.6, color: '#cbd5e1' }}>
+              {loadingDescription}
+            </span>
+          )}
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       )}
@@ -1448,10 +1465,72 @@ const GraphFlowInner = forwardRef<GraphFlowHandle, GraphFlowProps>(function Grap
 // Export: wrap with ReactFlowProvider
 // ─────────────────────────────────────────────
 
-const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({ onNodeSelect, apiNodes, apiEdges, loading, issueHighlightIds }, ref) {
+function GraphLoadingPanel({
+  title = 'Loading graph…',
+  description,
+}: {
+  title?: string;
+  description?: string;
+}) {
+  return (
+    <div style={{
+      width: '100%', height: '100%', minHeight: 280, position: 'relative',
+      background: '#05070a', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: '"JetBrains Mono", monospace',
+    }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: 12, maxWidth: 440, padding: 24, textAlign: 'center',
+      }}>
+        <div style={{
+          width: 34, height: 34, border: '2px solid #00e5ff33',
+          borderTopColor: '#00e5ff', borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <div style={{ fontSize: 11, color: '#00e5ff', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 700 }}>
+          {title}
+        </div>
+        {description && (
+          <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
+            {description}
+          </div>
+        )}
+      </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+const GraphFlow = forwardRef<GraphFlowHandle, GraphFlowProps>(function GraphFlow({
+  onNodeSelect,
+  apiNodes,
+  apiEdges,
+  loading,
+  loadingTitle,
+  loadingDescription,
+  issueHighlightIds,
+}, ref) {
+  if (loading && (!apiNodes || !apiEdges)) {
+    return (
+      <GraphLoadingPanel
+        title={loadingTitle}
+        description={loadingDescription}
+      />
+    );
+  }
+
   return (
     <ReactFlowProvider>
-      <GraphFlowInner ref={ref} onNodeSelect={onNodeSelect} apiNodes={apiNodes} apiEdges={apiEdges} loading={loading} issueHighlightIds={issueHighlightIds} />
+      <GraphFlowInner
+        ref={ref}
+        onNodeSelect={onNodeSelect}
+        apiNodes={apiNodes}
+        apiEdges={apiEdges}
+        loading={loading}
+        loadingTitle={loadingTitle}
+        loadingDescription={loadingDescription}
+        issueHighlightIds={issueHighlightIds}
+      />
     </ReactFlowProvider>
   );
 });
