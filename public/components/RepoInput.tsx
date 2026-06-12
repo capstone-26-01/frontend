@@ -3,8 +3,7 @@
 
 const QUICK_REPOS: { label: string; repo: string }[] = [
   { label: 'oop-car', repo: 'sanghyunna/oop-car' },
-  { label: 'facebook/react', repo: 'facebook/react' },
-  { label: 'tailwindlabs/tailwindcss', repo: 'tailwindlabs/tailwindcss' },
+  { label: 'openai/CLIP', repo: 'openai/CLIP' },
 ];
 
 interface RepoInputProps {
